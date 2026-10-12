@@ -14,6 +14,7 @@ import { fmtPercent } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
 import type { ComposerControl } from '../composerControl'
 import { usePressActivation } from '../../hooks/usePressActivation'
+import { useAnchorRemeasure } from '../../hooks/useAnchorRemeasure'
 import { useActionShortcutHint } from '../../hooks/useActionShortcutHint'
 import { IS_MAC } from '../../hooks/useKeyboardShortcuts'
 import type { ChatInputProps } from './props'
@@ -267,7 +268,7 @@ function CacheHitRate({ slot }: { slot: string }) {
 
 /** The context-window readout and its popover (usage, model, the per-session
  *  auto-compact threshold). */
-export function ContextUsageControl({ contextPct, contextUnknown = false, contextUsedTokens, contextWindowTokens, derivePctFromUsed, showContextPct, showContextTokens, shelfCompact, modelName, cacheSlot, ctxPopoverOpen, setCtxPopoverOpen, ctxWrapRef, autoCompactThreshold }: {
+export function ContextUsageControl({ contextPct, contextUnknown = false, contextUsedTokens, contextWindowTokens, derivePctFromUsed, showContextPct, showContextTokens, shelfCompact, modelName, cacheSlot, ctxPopoverOpen, setCtxPopoverOpen, ctxWrapRef, autoCompactThreshold, openBelow = false }: {
   contextPct: number
   /** No reading for this slot yet: rendered as unknown, never as a measured 0%. */
   contextUnknown?: boolean
@@ -284,6 +285,9 @@ export function ContextUsageControl({ contextPct, contextUnknown = false, contex
   setCtxPopoverOpen: (update: (open: boolean) => boolean) => void
   ctxWrapRef: React.RefObject<HTMLDivElement>
   autoCompactThreshold: ReturnType<typeof useAutoCompactThreshold>
+  /** Open below the readout instead of above it, capped to the room below
+   *  (`ChatInputProps.openBelow`). */
+  openBelow?: boolean
 }) {
   const { autoCompactQuery, autoCompact, autoCompactError, setAutoCompactError, pushAutoCompact } = autoCompactThreshold
   const harnessManagedNote = harnessManagedNoteBackend(autoCompact)
@@ -324,11 +328,22 @@ export function ContextUsageControl({ contextPct, contextUnknown = false, contex
   // `useContextPopover`'s outside-press dismiss skips `ctxWrapRef`, which holds
   // this button, so a press while open toggles it closed.
   const bindPress = usePressActivation()
+  // Opened below, the popover is capped to the room under the readout (its
+  // 4px gap plus an 8px margin), measured on open and again while it moves.
+  const [roomBelow, setRoomBelow] = useState<number | null>(null)
+  const measureRoomBelow = useCallback(() => {
+    const r = ctxWrapRef.current?.getBoundingClientRect()
+    if (r) setRoomBelow(Math.max(0, window.innerHeight - r.bottom - 12))
+  }, [ctxWrapRef])
+  useAnchorRemeasure(openBelow && ctxPopoverOpen, measureRoomBelow)
   return (
   <div ref={ctxWrapRef} className="relative flex items-center">
     <button
       className={`inline-flex items-center h-7 px-2.5 rounded-md transition-colors border-none cursor-pointer ${ctxPopoverOpen ? 'bg-[color-mix(in_srgb,var(--bg-elevated)_84%,var(--text))]' : 'bg-transparent hover:bg-[color-mix(in_srgb,var(--bg-elevated)_84%,var(--text))]'}`}
-      {...bindPress(() => setCtxPopoverOpen(o => !o))}
+      {...bindPress(() => {
+        if (openBelow && !ctxPopoverOpen) measureRoomBelow()
+        setCtxPopoverOpen(o => !o)
+      })}
       title={contextTip(effectivePct, contextUnknown)}
       aria-label={i18nT('components.chatInput.context_usage')}
       {...uiLocation('composer.context-usage')}
@@ -337,7 +352,10 @@ export function ContextUsageControl({ contextPct, contextUnknown = false, contex
       {showAnyReadout && <span className="text-[11px] ml-1.5 tabular-nums whitespace-nowrap" style={{ color: pctColor }}>{readout}</span>}
     </button>
     {ctxPopoverOpen && (
-      <div className="absolute bottom-full right-0 mb-1 z-[60] w-52 rounded-xl border border-border bg-bg-elevated shadow-xl p-3 animate-slide-up">
+      <div
+        className={`absolute ${openBelow ? 'top-full right-0 mt-1 overflow-y-auto' : 'bottom-full right-0 mb-1'} z-[60] w-52 rounded-xl border border-border bg-bg-elevated shadow-xl p-3 animate-slide-up`}
+        style={openBelow && roomBelow != null ? { maxHeight: roomBelow } : undefined}
+      >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] font-semibold text-text">{i18nT('components.chatInput.context_window')}</span>
                   <span className="text-[12px] font-mono font-bold" style={{ color: pctColor }}>{contextUnknown ? unknownMark : fmtPercent(contextPctClamped(effectivePct) / 100)}</span>

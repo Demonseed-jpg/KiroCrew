@@ -29,20 +29,21 @@ const fireAll = () => { for (const o of [...observers]) o.callback([], o as unkn
 let layoutTop: Record<string, number> = {}
 const HEIGHT = 60
 
-function Shell() {
+function Shell({ historyAtBottom = false, liveEdgeAtTop, paddingTop }: { historyAtBottom?: boolean; liveEdgeAtTop?: boolean; paddingTop?: number }) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const topSentinelRef = useRef<HTMLDivElement | null>(null)
   const bottomSentinelRef = useRef<HTMLDivElement | null>(null)
   return (
-    <TranscriptScrollShell scrollerRef={scrollerRef} onScroll={() => {}} loadingOlder={false}
+    <TranscriptScrollShell scrollerRef={scrollerRef} onScroll={() => {}} loadingOlder={false} historyAtBottom={historyAtBottom} liveEdgeAtTop={liveEdgeAtTop}
+      scrollerStyle={paddingTop === undefined ? undefined : { paddingTop }}
       virt={{ topSentinelRef, bottomSentinelRef, offsetBefore: 0, offsetAfter: 0 }}>
       <div data-display-index="0"><p data-b="a">above the line</p><p data-b="b">the line the reader is on</p><p data-b="c">below</p></div>
     </TranscriptScrollShell>
   )
 }
 
-function mount(scrollTop: number) {
-  const utils = render(<Shell />)
+function mount(scrollTop: number, historyAtBottom = false, liveEdgeAtTop?: boolean, paddingTop?: number) {
+  const utils = render(<Shell historyAtBottom={historyAtBottom} liveEdgeAtTop={liveEdgeAtTop} paddingTop={paddingTop} />)
   const sc = utils.container.querySelector<HTMLDivElement>('.chat-container')!
   Object.defineProperty(sc, 'clientHeight', { configurable: true, value: 600 })
   Object.defineProperty(sc, 'scrollHeight', { configurable: true, value: 5000 })
@@ -91,6 +92,47 @@ describe('transcript slide anchor', () => {
     act(() => { vi.advanceTimersByTime(1000) })
     expect(sc.hasAttribute('data-slide-anchor')).toBe(false)
     expect(readingPositionHeld(sc)).toBe(false)
+  })
+
+  it('top-down layout: a reader at the top, where the newest turn is, stays at scrollTop 0 through the slide', () => {
+    layoutTop = { a: 0, b: 150, c: 210 }
+    const { sc } = mount(0, true)
+    const end = beginPanelSlide()
+    expect(sc.hasAttribute('data-slide-anchor')).toBe(false)
+    expect(readingPositionHeld(sc)).toBe(false)
+    // The column rewraps 80px taller above the 30% line, and the browser's
+    // own anchoring moved the scroller: the hold writes it back to 0.
+    layoutTop = { a: 0, b: 230, c: 290 }
+    sc.scrollTop = 80
+    act(() => { fireAll() })
+    expect(sc.scrollTop).toBe(0)
+    act(() => { end() })
+    sc.scrollTop = 40
+    act(() => { vi.advanceTimersByTime(16) })
+    expect(sc.scrollTop).toBe(0)
+    act(() => { vi.advanceTimersByTime(1000) })
+  })
+
+  it('top-down split pane: a host that places its own paging bar holds the top reader with liveEdgeAtTop alone', () => {
+    layoutTop = { a: 0, b: 150, c: 210 }
+    const { sc } = mount(0, false, true)
+    const end = beginPanelSlide()
+    expect(sc.hasAttribute('data-slide-anchor')).toBe(false)
+    layoutTop = { a: 0, b: 230, c: 290 }
+    sc.scrollTop = 80
+    act(() => { fireAll() })
+    expect(sc.scrollTop).toBe(0)
+    act(() => { end(); vi.advanceTimersByTime(1000) })
+  })
+
+  it('top-down layout: a reader scrolled into history keeps the block anchor', () => {
+    const { sc, line } = mount(1000, true)
+    const end = beginPanelSlide()
+    expect(sc.hasAttribute('data-slide-anchor')).toBe(true)
+    layoutTop = { a: 1000, b: 1230, c: 1290 }
+    act(() => { fireAll() })
+    expect(line.getBoundingClientRect().top).toBe(150)
+    act(() => { end(); vi.advanceTimersByTime(1000) })
   })
 
   it('stays out of the way at the bottom: the transcript follows the bottom there', () => {
@@ -212,5 +254,95 @@ describe('transcript slide anchor', () => {
     act(() => { fireAll() })
     expect(line.getBoundingClientRect().top).toBe(230)
     act(() => { end() })
+  })
+
+  it('top-down layout: a padding decrease holds a reader at the same content', () => {
+    const view = (paddingTop: number) => <Shell liveEdgeAtTop paddingTop={paddingTop} />
+    const { container, rerender } = render(view(200))
+    const sc = container.querySelector<HTMLDivElement>('.chat-container')!
+    let scrollTop = 300
+    let heldDuringWrite = false
+    const writes: number[] = []
+    Object.defineProperty(sc, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (next: number) => {
+        scrollTop = next
+        heldDuringWrite = readingPositionHeld(sc)
+        writes.push(next)
+      },
+    })
+
+    act(() => { rerender(view(150)) })
+
+    expect(sc.style.paddingTop).toBe('150px')
+    expect(scrollTop).toBe(250)
+    expect(writes).toEqual([250])
+    expect(heldDuringWrite).toBe(true)
+    act(() => { vi.advanceTimersByTime(16) })
+    expect(readingPositionHeld(sc)).toBe(false)
+  })
+
+  it('top-down layout: a padding change keeps a follower at scrollTop 0', () => {
+    const view = (paddingTop: number) => <Shell liveEdgeAtTop paddingTop={paddingTop} />
+    const { container, rerender } = render(view(200))
+    const sc = container.querySelector<HTMLDivElement>('.chat-container')!
+    let writes = 0
+    Object.defineProperty(sc, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: () => { writes += 1 },
+    })
+
+    act(() => { rerender(view(150)) })
+
+    expect(sc.style.paddingTop).toBe('150px')
+    expect(sc.scrollTop).toBe(0)
+    expect(writes).toBe(0)
+  })
+
+  it('clears effect-owned top padding when the live edge moves back to the bottom', () => {
+    const { container, rerender } = render(<Shell liveEdgeAtTop paddingTop={200} />)
+    const sc = container.querySelector<HTMLDivElement>('.chat-container')!
+
+    act(() => { rerender(<Shell liveEdgeAtTop={false} />) })
+
+    expect(sc.style.paddingTop).toBe('')
+  })
+
+  it('keeps the slide anchor in control when top padding changes during a slide', () => {
+    const { sc, rerender } = mount(1000, false, true, 200)
+    const end = beginPanelSlide()
+    expect(sc.hasAttribute('data-slide-anchor')).toBe(true)
+    expect(readingPositionHeld(sc)).toBe(true)
+
+    act(() => { rerender(<Shell liveEdgeAtTop paddingTop={150} />) })
+
+    expect(sc.style.paddingTop).toBe('150px')
+    expect(sc.scrollTop).toBe(950)
+    expect(readingPositionHeld(sc)).toBe(true)
+    act(() => { releaseReadingPosition(sc) })
+    expect(sc.hasAttribute('data-slide-anchor')).toBe(false)
+    expect(readingPositionHeld(sc)).toBe(false)
+    act(() => { end() })
+  })
+
+  it('bottom layout leaves scrollTop to the browser when padding changes', () => {
+    const view = (paddingTop: number) => <Shell liveEdgeAtTop={false} paddingTop={paddingTop} />
+    const { container, rerender } = render(view(200))
+    const sc = container.querySelector<HTMLDivElement>('.chat-container')!
+    let scrollTop = 300
+    let writes = 0
+    Object.defineProperty(sc, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (next: number) => { scrollTop = next; writes += 1 },
+    })
+
+    act(() => { rerender(view(150)) })
+
+    expect(sc.style.paddingTop).toBe('150px')
+    expect(scrollTop).toBe(300)
+    expect(writes).toBe(0)
   })
 })
