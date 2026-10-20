@@ -77,6 +77,7 @@ from kiro_crew.config.sections import (
     EXTERNAL_TERMINAL_APPS,
     FOLDER_SORT_MODES,
     JUDGE_PROVIDERS,
+    PRIVACY_ACK_VERSION_MAX,
     REMOTE_EDITOR_HOST_PATTERN,
     REMOTE_EDITOR_IDS,
     SESSION_SORT_MODES,
@@ -513,11 +514,16 @@ def _theme_payload(cfg: KiroCrewConfig) -> dict[str, object]:
     One builder for all four response sites so a newly-added preference cannot
     be surfaced by some of them and silently omitted by the rest.
 
-    An enterprise build reports ``privacy_acked`` as true, so the SPA never opens
-    the first-run Privacy chapter there: the admin, not the user, decides where
-    usage data goes. Only the response says so; the stored value is unchanged.
+    An enterprise build reports ``privacy_acked`` as true and the notice version
+    as current, so the SPA never opens the first-run Privacy chapter there, nor
+    the once-more showing of a changed notice: the admin, not the user, decides
+    where usage data goes. Only the response says so; the stored values are
+    unchanged.
     """
+    from kiro_crew.beacon import PRIVACY_NOTICE_VERSION
     from kiro_crew.edition import is_enterprise
+
+    enterprise = is_enterprise()
 
     return {
         "mode": cfg.dashboard.theme_mode or "",
@@ -526,7 +532,12 @@ def _theme_payload(cfg: KiroCrewConfig) -> dict[str, object]:
         "translucent_panels": cfg.dashboard.translucent_panels or "",
         "onboarded": cfg.dashboard.onboarded,
         "import_onboarded": cfg.dashboard.import_onboarded,
-        "privacy_acked": cfg.dashboard.privacy_acked or is_enterprise(),
+        "privacy_acked": cfg.dashboard.privacy_acked or enterprise,
+        "privacy_ack_version": (
+            max(cfg.dashboard.privacy_ack_version, PRIVACY_NOTICE_VERSION)
+            if enterprise
+            else cfg.dashboard.privacy_ack_version
+        ),
         "crewmates_onboarded": cfg.dashboard.crewmates_onboarded,
     }
 
@@ -547,8 +558,8 @@ async def api_theme_config(request: web.Request) -> web.Response:
 
     GET returns the current config. PUT accepts
     {mode?, color?, language?, translucent_panels?, onboarded?, import_onboarded?,
-    privacy_acked?, crewmates_onboarded?} and persists ONLY those ``dashboard.*``
-    keys.
+    privacy_acked?, privacy_ack_version?, crewmates_onboarded?} and persists ONLY
+    those ``dashboard.*`` keys.
 
     The PUT is a locked delta read-modify-write, never a whole-document
     ``KiroCrewConfig.save()``. A momentarily unreadable ``config.json`` (a torn
@@ -616,6 +627,19 @@ async def api_theme_config(request: web.Request) -> web.Response:
             if not isinstance(body[flag], bool):
                 raise web.HTTPBadRequest(text=f"{flag} must be a boolean")
             updates[flag] = body[flag]
+    # A real int only, for the same reason: ``True`` is an int in Python and
+    # would store as 1.
+    if "privacy_ack_version" in body:
+        version = body["privacy_ack_version"]
+        if (
+            not isinstance(version, int)
+            or isinstance(version, bool)
+            or not 0 <= version <= PRIVACY_ACK_VERSION_MAX
+        ):
+            raise web.HTTPBadRequest(
+                text=f"privacy_ack_version must be an integer from 0 to {PRIVACY_ACK_VERSION_MAX}"
+            )
+        updates["privacy_ack_version"] = version
 
     if updates:
 
