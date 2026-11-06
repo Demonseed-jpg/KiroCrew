@@ -988,6 +988,7 @@ async def _turn_record_outcome(turn: _ChatTurn) -> None:
                 state, turn._drained_merge_contexts
             )
     slot._inflight_merge_contexts = []
+    slot._inflight_session_notes = []
     # First: hand back the session-switch lock if this turn exited between
     # its acquire and its post-registration release. Before anything that
     # can await, and before _restore_refusal_fallback (chat_turn/model_fallback.py) takes the

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,6 +35,11 @@ from kiro_crew.dashboard import chat_runner
 from kiro_crew.dashboard.state import DashboardState, _ChatSlot
 from kiro_crew.providers.base import LLMEvent
 from kiro_crew.testing.wait import await_until
+
+
+def _untagged(prefix: str) -> str:
+    """*prefix* with its end-marker tag blanked: each drain draws its own tag."""
+    return re.sub(r"\b[0-9a-f]{12}\b", "<tag>", prefix)
 
 
 def _adopt(slot: _ChatSlot, slots: list[_ChatSlot]) -> int:
@@ -293,7 +299,7 @@ class TestTakeTurnContext:
             state, own, transcript_identity=own._disk_meta_created_at
         )
 
-        assert prefix == chat_runner.drain_pending_context(control)
+        assert _untagged(prefix) == _untagged(chat_runner.drain_pending_context(control))
         assert "panel state" in prefix
         assert consumed == []
         assert own._pending_context == []
@@ -700,6 +706,54 @@ class TestTakeTurnContext:
         assert "merged summary" in prompt
         assert first._pending_context == []
 
+    @pytest.mark.asyncio
+    async def test_a_session_note_takes_one_seat_when_a_card_is_moved(self, tmp_path):
+        """The turn holds a session note's seat only after the drain, so a card
+        that fits beside the note is still moved onto this turn."""
+        from kiro_crew.context import ContextBuilder
+        from kiro_crew.dashboard import session_control as sc
+        from kiro_crew.memory import MemoryStore
+        from kiro_crew.skills import SkillsLoader
+
+        builder = ContextBuilder(
+            memory=MemoryStore(workspace=tmp_path / "ws"),
+            skills=SkillsLoader(skills_path=tmp_path / "skills", install_builtins=False),
+        )
+        state, client = _runner_state(tmp_path, context_builder=builder)
+        client.client = MagicMock(pop_pending_oauth_requests=MagicMock(return_value=[]))
+        first, twin, _key = self._twins_with_a_transcript(state)
+        twin._disk_meta_created_at = first._disk_meta_created_at
+        first._pending_context = [
+            self._card("merged summary", chat_runner.effective_session_key(first))
+        ]
+        twin._pending_context = [
+            {
+                "content": "note text",
+                "source": sc.SESSION_NOTE_SOURCE,
+                "admission": sc.containment_meta(state, twin),
+            },
+            *(
+                {"content": f"own {n}", "source": f"s{n}"}
+                for n in range(chat_runner._MAX_PENDING_CONTEXT - 2)
+            ),
+        ]
+        self._register(state, first, twin)
+        _set_stream(client, [LLMEvent(kind=EVENT_TEXT_CHUNK, text="ok"), _complete()])
+
+        with patch.object(
+            chat_runner, "generate_session_summary", new=AsyncMock(return_value=None)
+        ):
+            await _drive(state, twin, "first message")
+            await await_until(
+                asyncio.gather(*list(state._background_tasks), return_exceptions=True),
+                what="the moved-card background task cleanup",
+            )
+
+        prompt = client.stream.call_args_list[0].args[0]
+        assert "note text" in prompt
+        assert "merged summary" in prompt
+        assert first._pending_context == []
+
     def test_a_card_the_mover_refuses_is_not_reported_consumed(self, tmp_path):
         """The turn hands the mover every card a same-app slot holds for its session
         and lets the rule decide; a refused card stays in its holder's queue and
@@ -835,7 +889,9 @@ class TestVerbatimReplayMergeCards:
             state, whole, transcript_identity=whole._disk_meta_created_at
         )
 
-        assert taken.prefix_without_cards == chat_runner.drain_pending_context(plain_only)
+        assert _untagged(taken.prefix_without_cards) == _untagged(
+            chat_runner.drain_pending_context(plain_only)
+        )
         assert taken.consumed == [card]
         assert taken.prefix.count(self.CARD) == 1
         assert self.CARD not in taken.prefix_without_cards
