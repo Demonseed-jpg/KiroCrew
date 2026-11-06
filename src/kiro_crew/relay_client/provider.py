@@ -20,6 +20,7 @@ so the relay client is never chosen over an edition's provider.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -243,6 +244,15 @@ class RelayTunnelProvider:
         self._on_connect: Optional[Callable[[str], Awaitable[None]]] = None
         self._on_disconnect: Optional[Callable[[], Awaitable[None]]] = None
         self._error = ""
+        #: Asked after the sign-in read, before a client is built. The Remote
+        #: Control guard sets it, so an off landing during that read wins.
+        self._start_gate: Optional[Callable[[], bool]] = None
+        #: Set while a start runs. Its sign-in read can take seconds, and a second
+        #: start overlapping it would build a second client and orphan the first.
+        self._starting = False
+        #: A start that arrived during another is folded into it: the running one
+        #: tries again if it built no client, with the inputs as they are then.
+        self._start_again = False
 
     @property
     def settings(self) -> RelaySettings:
@@ -262,10 +272,44 @@ class RelayTunnelProvider:
         if self._client is not None:
             self._client.register_callbacks(on_connect=on_connect, on_disconnect=on_disconnect)
 
+    def set_start_gate(self, gate: Optional[Callable[[], bool]]) -> None:
+        """Ask *gate* after the sign-in read whether a start is still wanted."""
+        self._start_gate = gate
+
     async def start(self) -> None:
         if self._client is not None and self._client.running:
             return
         if not self._settings.enabled:
+            return
+        if self._starting:
+            self._start_again = True
+            return
+        self._starting = True
+        try:
+            while True:
+                self._start_again = False
+                before = self._client
+                await self._start_client()
+                if self._client is not before or not self._start_again:
+                    break
+        finally:
+            self._starting = False
+            self._start_again = False
+
+    async def _start_client(self) -> None:
+        from kiro_crew.remote_control.policy import current_decision
+
+        # Judged on these settings, the ones the relay will run with.
+        decision = await asyncio.to_thread(current_decision, team=self._settings.is_team_crew)
+        if not decision.ok:
+            from kiro_crew.remote_control.policy import audit_refusal
+
+            logger.warning("Remote Control relay not started: %s", decision.reason)
+            await asyncio.to_thread(audit_refusal, "tunnel.start_denied", decision)
+            self._error = decision.notice
+            return
+        if self._start_gate is not None and not self._start_gate():
+            logger.info("Remote Control relay not started: turned off during the sign-in read")
             return
         try:
             self._settings.validate()
