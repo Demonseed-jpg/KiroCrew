@@ -646,6 +646,27 @@ def read_config_document() -> ConfigDocument:
                     type(_agent_section[_fail_closed_key]).__name__,
                 )
                 _agent_section[_fail_closed_key] = False
+    # Same rule for ``telemetry.enabled``, whose missing-field default is TRUE
+    # (local recording on): a quoted ``"false"``, or a ``telemetry`` that is not
+    # an object (an overlay's ``null`` replacing the base section), must not
+    # ride that default back to recording against a stored opt-out.
+    _telemetry_section = data.get("telemetry", {})
+    if not isinstance(_telemetry_section, dict):
+        logger.warning(
+            "telemetry is %s, not an object; reading local recording as off "
+            "(telemetry.enabled false). Write an object such as "
+            '{"enabled": true} to choose.',
+            type(_telemetry_section).__name__,
+        )
+        data["telemetry"] = {"enabled": False}
+    elif "enabled" in _telemetry_section and not isinstance(_telemetry_section["enabled"], bool):
+        logger.warning(
+            "telemetry.enabled is %s, not a boolean; reading it as the safe "
+            "value false (local recording is OFF). Write true or false "
+            "without quotes to choose.",
+            type(_telemetry_section["enabled"]).__name__,
+        )
+        _telemetry_section["enabled"] = False
     # Keep a genuinely absent default backward-compatible with older
     # configs, but normalize a PRESENT malformed value before advisory
     # schema validation can delete it and turn corruption into the
