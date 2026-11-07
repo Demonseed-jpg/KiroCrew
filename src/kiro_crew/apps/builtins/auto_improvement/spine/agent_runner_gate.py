@@ -276,8 +276,42 @@ def _refusal(text: str, *, depth: int) -> str:
         # denylist, so exhausting the budget must not become a way through it.
         return "command nests shells too deeply to analyze"
 
-    # Each shell-separated segment is its own command; check them all.
-    for words in _segments(text):
+    # Each shell-separated command is checked on its own. Quotes are read BEFORE the
+    # split, so a quoted `;` stays in its word while `sh -c 'a; b'` still yields `b` as a
+    # command. `\x00` marks a substitution opener (backtick, `$(`), which runs even inside
+    # double quotes.
+    seps = "();|&\n\x00"
+    marked = text.replace("`", "\x00").replace("$(", "\x00(")
+    lex = shlex.shlex(marked, posix=True, punctuation_chars=seps)
+    lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
+    try:
+        tokens = list(lex)
+    except ValueError:
+        # Unclosed quotes, or an apostrophe in a comment or heredoc body. The quote-blind
+        # split leaves quotes glued to words (`'git`), so a nested script it re-parses
+        # would pass unseen: refuse when one is there, else only the quote-blind split runs.
+        names = {w.strip("'\"").rsplit("/", 1)[-1].lower() for s in _segments(text) for w in s}
+        short_c = any(w[:1] == "-" and w[1:2] != "-" and "c" in w for w in names)
+        if names & {"eval", "watch", "script"} or (names & _SHELL_BINARIES and short_c):
+            return "command holds a nested script the gate cannot parse"
+        tokens = None
+    segments: list[list[str]] = [[]]
+    for tok in tokens or []:
+        if tok and set(tok) <= set(seps):
+            segments.append([])
+            continue
+        if "\x00" in tok:  # a quoted word holding a substitution: check what it runs
+            reason = _refusal(tok, depth=depth + 1)
+            if reason:
+                return reason
+        segments[-1].append(tok)
+    # shlex and bash read some quotes differently (comments, heredocs, `${x:-"'"}`), so
+    # the quote-aware split above only ADDS commands to check. The quote-blind split is
+    # always run too, so whatever it finds stays refused.
+    segments += _segments(text)
+    # Both splits usually find the same commands; check each distinct one once, so the
+    # cost of nested wrappers does not multiply per level.
+    for words in map(list, dict.fromkeys(map(tuple, segments))):
         # Drop leading VAR=value assignments (`GH_TOKEN=x gh api …`).
         while words and "=" in words[0] and not words[0].startswith("-"):
             words = words[1:]
@@ -298,6 +332,26 @@ def _refusal(text: str, *, depth: int) -> str:
                     break
             # Fall through: a shell invoked WITHOUT -c still gets its own args checked below.
 
+        # `eval` joins its arguments and runs them as a script. Re-check that script
+        # whole, before any option or VAR=value stripping: the wrapper path would drop
+        # a quoted script word that holds `=` (`eval 'GH_TOKEN=x gh pr merge'`).
+        if binary == "eval":
+            script = words[1:]
+            if script[:1] == ["--"]:
+                script = script[1:]
+            reason = _refusal(" ".join(script), depth=depth + 1)
+            if reason:
+                return reason
+            continue
+
+        # `script -c CMD` / `--command[=]CMD` runs CMD in a shell; the skip below eats it.
+        if binary == "script":
+            for i, w in enumerate(words[1:], start=1):
+                short_c = w.startswith("-") and not w.startswith("--") and w.endswith("c")
+                nxt = words[i + 1] if i + 1 < len(words) and (short_c or w == "--command") else None
+                cmd = w[10:] if w.startswith("--command=") else nxt
+                if cmd is not None and (reason := _refusal(cmd, depth=depth + 1)):
+                    return reason
         # A wrapper runs the command that follows it, so check that command instead.
         if binary in _COMMAND_WRAPPERS:
             wrapped = list(words[1:])
@@ -339,9 +393,11 @@ def _refusal(text: str, *, depth: int) -> str:
             while wrapped and "=" in wrapped[0] and not wrapped[0].startswith("-"):
                 wrapped = wrapped[1:]
             if wrapped:
-                reason = _refusal(" ".join(wrapped), depth=depth + 1)
-                if reason:
-                    return reason
+                # Some wrappers pass their words on unparsed (re-quoted), some hand them
+                # joined to a shell, and an option may swallow the real binary; check both.
+                for joined in dict.fromkeys((" ".join(wrapped), shlex.join(wrapped))):
+                    if reason := _refusal(joined, depth=depth + 1):
+                        return reason
             continue
         if binary in _FORBIDDEN_BINARIES:
             return f"{binary!r} cannot be run here"
