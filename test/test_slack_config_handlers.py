@@ -417,6 +417,57 @@ def test_restart_required_only_on_actual_change(tmp_path, monkeypatch) -> None:
     # Changed command (boot-read): restart.
     body = asyncio.run(_run({"command": "myclaw"}))
     assert body["restart_required"] is True
+    assert body["reconnect_required"] is False
+
+
+def test_a_token_change_asks_for_a_reconnect_not_a_restart(tmp_path, monkeypatch) -> None:
+    """Tokens apply through POST /api/slack/reconnect, so a save that wrote one
+    flags ``reconnect_required`` and leaves ``restart_required`` off."""
+    import kiro_crew.dashboard.handlers.messaging as mod
+
+    async def _accepted(key, token):
+        return None
+
+    monkeypatch.setattr(mod, "_validate_slack_token", _accepted)
+    (status, body), _env = _client_put(
+        mod, monkeypatch, tmp_path, {"bot_token": "xoxb-placeholder-token"}
+    )
+    assert status == 200
+    assert body["reconnect_required"] is True
+    assert body["restart_required"] is False
+
+
+def test_an_owner_change_asks_for_a_restart_not_a_reconnect(tmp_path, monkeypatch) -> None:
+    """Reconnect refuses to change the owner in place (work was admitted under
+    the old one), so a save that wrote the owner ID asks for a restart."""
+    import kiro_crew.dashboard.handlers.messaging as mod
+
+    monkeypatch.delenv("KIROCREW_OWNER_ID", raising=False)
+    (status, body), _env = _client_put(mod, monkeypatch, tmp_path, {"owner_id": "U0123ABC456"})
+    assert status == 200
+    assert body["restart_required"] is True
+    assert body["reconnect_required"] is False
+
+
+def test_an_owner_and_token_save_asks_only_for_a_restart(tmp_path, monkeypatch) -> None:
+    """Reconnect would refuse the owner change before applying the token, so a
+    save that wrote both never offers it: the restart applies both."""
+    import kiro_crew.dashboard.handlers.messaging as mod
+
+    async def _accepted(key, token):
+        return None
+
+    monkeypatch.setattr(mod, "_validate_slack_token", _accepted)
+    monkeypatch.delenv("KIROCREW_OWNER_ID", raising=False)
+    (status, body), _env = _client_put(
+        mod,
+        monkeypatch,
+        tmp_path,
+        {"owner_id": "U0123ABC456", "bot_token": "xoxb-placeholder-token"},
+    )
+    assert status == 200
+    assert body["restart_required"] is True
+    assert body["reconnect_required"] is False
 
 
 def test_webex_held_env_lock_leaves_legacy_credential_intact(tmp_path, monkeypatch) -> None:
