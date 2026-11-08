@@ -3,6 +3,7 @@ import { NativeSelect, NativeSelectOption } from './ui/native-select'
 import { useIsTouchDevice } from '../hooks/useIsTouchDevice'
 import { SourceBadge } from './ui'
 import { forwardRef, type ForwardedRef } from 'react'
+import { cn } from '../lib/utils'
 import { forwardUiLocation } from '../uiLocations/uiLocation'
 
 /**
@@ -40,6 +41,12 @@ import { forwardUiLocation } from '../uiLocations/uiLocation'
 const EMPTY_VALUE_SENTINEL = '\u0000simple-select-empty'
 const ACTION_SENTINEL = '\u0000simple-select-action'
 
+/** The dimmed, pointer-inert look a `busy` control wears. Static and always on
+ *  the control, so the DOM tree does not change when busy flips; it paints only
+ *  while the control carries `aria-disabled`, which `busy` sets, so a non-busy
+ *  control (any other caller) is unaffected. */
+const BUSY_CLASS = 'aria-disabled:opacity-40 aria-disabled:pointer-events-none'
+
 export interface SimpleSelectProps {
   options: string[]
   /** Optional display labels for each option (same order as options). Falls back to the option value. */
@@ -71,6 +78,14 @@ export interface SimpleSelectProps {
    *  divergence is deliberate: each path gets the best form it can render. */
   optionBadges?: ({ label: string; source: string; hint?: string } | undefined)[]
   disabled?: boolean
+  /** Opt-in: the control is writing its own change right now. It stays focusable
+   *  and in the tab order (not native `disabled`, which drops a keyboard user to
+   *  the page), renders `aria-disabled` + `aria-busy` with the disabled look, and
+   *  ignores picks while the write runs. Default (unset) keeps today's behaviour
+   *  exactly, so no other caller changes. Distinct from `disabled`, which is
+   *  "not this control's doing" (another control is busy, or it is not ready) and
+   *  stays natively disabled; `busy` wins when both are set. */
+  busy?: boolean
   style?: React.CSSProperties
   /** Forwarded to the trigger so a caption's `<label htmlFor>` can name it
    *  (SettingsField pairs this with its label association). Optional: the
@@ -101,8 +116,17 @@ export interface SimpleSelectProps {
   'data-ui-location'?: string
 }
 
-const SimpleSelect = forwardRef(function SimpleSelect({ options, optionLabels, optionIcons, value, onChange, action, clearLabel, triggerFallback, labelsInListOnly, optionBadges, disabled, style, id, className, contentClassName, 'aria-label': ariaLabel, 'aria-describedby': ariaDescribedBy, title, 'data-ui-location': uiLocationId }: SimpleSelectProps, forwardedRef: ForwardedRef<HTMLElement>) {
+const SimpleSelect = forwardRef(function SimpleSelect({ options, optionLabels, optionIcons, value, onChange, action, clearLabel, triggerFallback, labelsInListOnly, optionBadges, disabled, busy, style, id, className, contentClassName, 'aria-label': ariaLabel, 'aria-describedby': ariaDescribedBy, title, 'data-ui-location': uiLocationId }: SimpleSelectProps, forwardedRef: ForwardedRef<HTMLElement>) {
   const isTouch = useIsTouchDevice()
+  // While busy the control refuses picks but stays focusable, so native
+  // `disabled` is dropped; the refusal is carried by the `aria-*` attributes and
+  // a guard on the change handler. The disabled LOOK and pointer-inertness ride
+  // on static `aria-disabled:` classes that are always present but only paint
+  // while the control is `aria-disabled` (i.e. busy) -- so the DOM tree is
+  // identical whether or not busy is set, and flipping busy never unmounts the
+  // control and drops its focus. A non-busy `disabled` stays native, as before.
+  const nativeDisabled = disabled && !busy
+  const busyAttrs = busy ? { 'aria-disabled': true, 'aria-busy': true } : {}
   // Spread, not a `data-ui-location={...}` attribute: the find_ui generator
   // reads every such attribute as a render site and needs a literal id there.
   const marker = forwardUiLocation(uiLocationId, forwardedRef)
@@ -135,14 +159,16 @@ const SimpleSelect = forwardRef(function SimpleSelect({ options, optionLabels, o
         aria-describedby={ariaDescribedBy}
         title={title}
         {...marker}
-        disabled={disabled}
+        {...busyAttrs}
+        disabled={nativeDisabled}
         // `style` lands on the WRAPPER on both paths. It is layout intent (a flex
         // basis, a min-width), and on this path the `<select>` is `w-full` inside
         // the wrapper — a flex rule placed on it is simply inert.
         wrapperStyle={selectedIcon ? { flex: '1 1 0', minWidth: 0 } : style}
-        className={className}
+        className={busy ? cn(className, BUSY_CLASS) : className}
         value={toRadix(value)}
         onChange={e => {
+          if (busy) return
           const v = e.target.value
           if (v === ACTION_SENTINEL) { action?.onSelect(); return }
           onChange(fromRadix(v))
@@ -177,12 +203,13 @@ const SimpleSelect = forwardRef(function SimpleSelect({ options, optionLabels, o
       <Select
         value={selectable(value) ? toRadix(value) : ''}
         onValueChange={v => {
+          if (busy) return
           if (v === ACTION_SENTINEL) { action?.onSelect(); return }
           onChange(fromRadix(v))
         }}
-        disabled={disabled}
+        disabled={nativeDisabled}
       >
-        <SelectTrigger id={id} aria-label={ariaLabel} aria-describedby={ariaDescribedBy} title={title} {...marker} className={className}>
+        <SelectTrigger id={id} aria-label={ariaLabel} aria-describedby={ariaDescribedBy} title={title} {...marker} {...busyAttrs} className={busy ? cn(className, BUSY_CLASS) : className}>
           <SelectValue placeholder={triggerFallback ?? clearLabel ?? (value || '—')}>
             {/* Children override the selected item's text. Passed only when there
                 IS a selectable non-empty value, so an unset control still falls
