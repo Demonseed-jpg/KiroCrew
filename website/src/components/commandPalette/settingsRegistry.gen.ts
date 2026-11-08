@@ -2183,6 +2183,19 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "configKey": "dashboard.dynamic_dashboard_cards"
   },
   {
+    "id": "developer.bot-chat-follows-its-page-colors",
+    "label": "Bot chat follows its page colors",
+    "labelKey": "pages.developer.featurePreviewsTab.chat_page_colors",
+    "description": "Colors a bot's chat from its dashboard page.",
+    "hint": "Tints a bot's chat on the Crewmates page with the colors of its dashboard page, so the chat and the Dashboard tab read as one theme. Text color adjusts automatically for readable contrast; pages without colors keep the default look.",
+    "tab": "developer",
+    "type": "toggle",
+    "occurrence": 1,
+    "params": {
+      "sub": "feature-previews"
+    }
+  },
+  {
     "id": "developer.bot-sessions-on-the-bot-s-profile",
     "label": "Bot sessions on the bot's profile",
     "labelKey": "pages.developer.featurePreviewsTab.mate_sessions",
