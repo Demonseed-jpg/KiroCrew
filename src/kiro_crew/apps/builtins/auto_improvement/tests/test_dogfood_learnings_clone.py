@@ -190,6 +190,7 @@ class TestTheStoredPushDestinationIsValidated:
             "https://x-access-token:TOK@github.com/owner/repo.git",  # authenticated form
             "/tmp/upstream.git",  # local bare repo: no network host to redirect to
             "file:///tmp/upstream.git",
+            "file://localhost/tmp/upstream.git",
         ],
     )
     def test_a_legitimate_remote_still_resolves(self, url) -> None:
@@ -208,6 +209,26 @@ class TestTheStoredPushDestinationIsValidated:
         if clone_setup._remote_slug(url):
             cfg["target_url"] = "https://github.com/owner/repo"
         assert clone_setup.resolve_origin_url(cfg) == url
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            r"\\host\share\repo.git",
+            "//host/share/repo.git",
+            r"\\?\UNC\host\share\repo.git",
+            "file://host/repo.git",
+            "file:////host/share/repo.git",
+            "file:///%2Fhost/share/repo.git",  # git percent-decodes a file url
+            "file://#host.invalid/share/repo.git",  # git reads the raw text, not urlparse's split
+            "user@host.invalid:owner/repo.git",  # git reads a `:` before any `/` as ssh
+            "192.0.2.10:owner/repo.git",
+            "file:repo.git",  # no `//`: ssh to a host named `file`
+        ],
+    )
+    def test_a_value_git_reads_as_remote_is_not_a_local_origin(self, url) -> None:
+        """A scheme-less or `file:` value that git reads as remote names a host: not local."""
+        cfg = {"origin_url": url, "target_url": "https://github.com/owner/repo"}
+        assert clone_setup.resolve_origin_url(cfg) == ""
 
     @pytest.mark.parametrize(
         "url",

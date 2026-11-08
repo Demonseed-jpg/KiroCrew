@@ -26,10 +26,11 @@ import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from kiro_crew.config.paths import data_home
 from kiro_crew.git_tmp_packs import reap_stale_tmp_packs
+from kiro_crew.hooks import is_unc_shape
 from kiro_crew.owner_only_files import mkdirs_owner_only
 from kiro_crew.platform.context import redact_via_context
 from kiro_crew.platform_compat import (
@@ -1013,7 +1014,9 @@ def _is_allowed_remote(url: str) -> bool:
     * A LOCAL path (``/tmp/x.git``, ``file://``, a relative path, or on Windows a drive path
       such as ``C:\\work\\repo.git``) is allowed: it cannot
       exfiltrate anywhere, it is what the app's own tests push to, and an operator pointing at
-      a local bare repo is a legitimate offline setup.
+      a local bare repo is a legitimate offline setup. A value git reads as remote is not
+      local: scp-like ``user@host:path``, ``file:`` without ``//``, a UNC path, or a
+      ``file://`` url with a host other than ``localhost``.
     * The ``DISABLED_NO_PUSH`` sentinel is refused — it is a marker, not a destination.
     """
     raw = (url or "").strip()
@@ -1030,7 +1033,19 @@ def _is_allowed_remote(url: str) -> bool:
         return True
     parsed = urlparse(raw)
     if parsed.scheme in ("", "file"):
-        # No network host to redirect to.
+        # Local only when git reads it as a local path that names no network host.
+        if raw.startswith("file://"):
+            # Judged on what git reads, the percent-decoded text after `file://`, not on
+            # urlparse's split: only `file:///path` and `file://localhost/path` name no host.
+            rest = unquote(raw[len("file://") :])
+            if rest.lower().startswith("localhost/"):
+                rest = rest[len("localhost") :]
+            return rest.startswith("/") and not is_unc_shape(rest)
+        # git's scp-like rule: a `:` before any `/` is ssh (`user@host:path`, `file:x`), and a
+        # UNC path (`\\host\share`, `//host/share`) names a network host.
+        colon, slash = raw.find(":"), raw.find("/")
+        if (colon != -1 and not -1 < slash < colon) or is_unc_shape(raw):
+            return False
         return bool((parsed.path or raw).strip())
     if parsed.scheme not in ("https", "ssh"):
         # http:// (cleartext), git://, ftp://, … are never our push transport.
