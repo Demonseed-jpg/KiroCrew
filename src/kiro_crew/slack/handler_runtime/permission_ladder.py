@@ -66,6 +66,7 @@ if TYPE_CHECKING:
         redact_exfiltration_urls,
         run_in_tool_gate_pool,
         sel,
+        slack_script_hooks,
         steer_refusal_notice,
         tool_approval_timeout_secs,
         trust_permitted,
@@ -170,14 +171,16 @@ async def _screen_tool_call(turn: _SlackTurn, event: LLMEvent) -> None:
 
 
 async def _answer_permission_request(
-    turn: _SlackTurn, client: LLMProvider, event: LLMEvent
+    turn: _SlackTurn, client: LLMProvider, event: LLMEvent, hook_turn: Any = None
 ) -> bool:
     """Answer one permission request: True when the person rejected it.
 
     ``_run_turn``'s ``EVENT_PERMISSION_REQUEST`` branch, the enforcing gate, in its
-    order: the hook verdict (an auto-approve by name, or a deny steered and rejected),
-    the ``auto_approve_subagent_spawn`` rung, the approval mode, Trust and YOLO, then
-    the interactive prompt. A rejected prompt ends the stream (``True``).
+    order: the agent spec's own PreToolUse hooks on a backend that never runs them
+    (*hook_turn*'s, ``slack/script_hooks.py``), the hook verdict (an auto-approve by
+    name, or a deny steered and rejected), the ``auto_approve_subagent_spawn`` rung,
+    the approval mode, Trust and YOLO, then the interactive prompt. A rejected prompt
+    ends the stream (``True``).
     """
     slack = turn.slack
     channel = turn.channel
@@ -188,6 +191,26 @@ async def _answer_permission_request(
     _agent = turn._agent
     answer = turn.answer
     task = turn.task
+    # The agent spec's own PreToolUse hooks first, as on the other ladders. They
+    # only ever refuse; audit first, then steer, then reject, as for a hook deny.
+    _spec_refusal = await slack_script_hooks.spec_pre_tool_refusal(hook_turn, event)
+    if _spec_refusal is not None:
+        sel().log_tool_invocation(
+            session_key=session_key,
+            source="slack",
+            tool_name=event.title,
+            tool_kind=event.tool_kind,
+            outcome="denied",
+            request_id=event.request_id,
+            error="spec_hook",
+        )
+        await _steer_host_deny(client, event, _spec_refusal, cause=DENY_CAUSE_POLICY, audited=True)
+        await client.reject_tool(event.request_id)
+        Stats().inc_tool_denial()
+        _blocked_title, _ = redact_exfiltration_urls(event.title)
+        _blocked_title, _ = redact_credentials(_blocked_title)
+        answer.accumulated += f"\n🚫 _Tool `{_blocked_title}` blocked by hooks._"
+        return False
     # Check tool hooks for auto-approve
     if context_builder:
         tool_result = await run_in_tool_gate_pool(

@@ -695,6 +695,18 @@ async def _run_turn(turn: _SlackTurn) -> bool:
             session_key, channel_id=channel, start_priority=start_priority, **_alloc
         )
         _acquired = True
+        # A stale KAS batch is reset and claimed again, so the spec's PreToolUse
+        # hooks see every call they cover.
+        _claim = await slack_script_hooks.reproject_claim(
+            sessions,
+            session_key,
+            str(_alloc.get("agent") or ""),
+            (client, is_new, resumed),
+            lambda: sessions.get_or_create(
+                session_key, channel_id=channel, start_priority=start_priority, **_alloc
+            ),
+        )
+        client, is_new, resumed = _claim
         if _compaction_replay is not None:
             # The gap the outer attempt opened stays open until this replay has
             # settled and released its permit (the outer's ``finally`` closes it):
@@ -720,6 +732,14 @@ async def _run_turn(turn: _SlackTurn) -> bool:
                 lambda: session_stop_generation(sessions, session_key) != _stop_gen_at_entry,
             )
         )
+        # The agent spec's own hooks, read for this attempt's provider.
+        if _hook_turn is not None:
+            await slack_script_hooks.attach_spec_hooks(
+                _hook_turn,
+                client,
+                str(_alloc.get("agent") or ""),
+                fresh_session=is_new and not resumed,
+            )
         # Expire AGAIN now the turn is serialized — see the same call in
         # transport_dispatch. The pass in ``_dispatch_before_turn`` runs before
         # `get_or_create` waits its turn, so two messages arriving together both
@@ -963,7 +983,7 @@ async def _run_turn(turn: _SlackTurn) -> bool:
                 await _screen_tool_call(turn, event)
 
             elif event.kind == EVENT_PERMISSION_REQUEST:
-                if await _answer_permission_request(turn, client, event):
+                if await _answer_permission_request(turn, client, event, _hook_turn):
                     break
 
             elif event.kind == CONTEXT_EVENT_COMPACTION:
@@ -992,6 +1012,10 @@ async def _run_turn(turn: _SlackTurn) -> bool:
                         session_key,
                     )
                 break
+
+            else:
+                # A mid-turn agent switch: the new agent's spec hooks gate what follows.
+                await slack_script_hooks.observe_agent_switch(_hook_turn, event)
 
         if _stop_reason == STOP_REASON_CANCELLED:
             logger.info("Turn cancelled by user for %s", session_key)

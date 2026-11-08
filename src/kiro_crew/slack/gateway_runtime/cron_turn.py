@@ -227,6 +227,34 @@ async def _cron_run_sequence(
                 )
                 _seq_downgraded = _seq_downgraded or _downgraded
                 _acq = True
+                from kiro_crew.messaging.script_hooks import reproject_claim
+
+                async def _seq_reclaim(
+                    _step: _SequenceStep = step, _execution: Any = _seq_execution
+                ) -> tuple[Any, bool, bool]:
+                    nonlocal _seq_downgraded
+                    _c, _n, _r, _d = await self._acquire_with_model_fallback(
+                        job,
+                        cron_execution,
+                        _step.session_key,
+                        _step.dispatch_agent,
+                        _step.cwd,
+                        _step.crew,
+                        execution=_execution,
+                        replace_execution=True,
+                    )
+                    _seq_downgraded = _seq_downgraded or _d
+                    return _c, _n, _r
+
+                # A stale KAS batch is reset and claimed again, as on the
+                # single-agent path.
+                client, is_new, _resumed = await reproject_claim(
+                    self.sessions,
+                    step.session_key,
+                    step.dispatch_agent,
+                    (client, is_new, _resumed),
+                    _seq_reclaim,
+                )
                 # Publish this turn's session identity so managed MCP
                 # tools resolve their parent session. The cron path was
                 # the ONE turn-running surface that skipped this (every
@@ -265,6 +293,28 @@ async def _cron_run_sequence(
                     needs_reinjection=_seq_reinjection,
                     minimal_context=job.minimal_context,
                     request_prefix_context=cap.prior_result or None,
+                )
+                # The step agent's own spec hooks on a backend that never runs
+                # them (KAS): AgentSpawn and UserPromptSubmit before the prompt,
+                # PreToolUse on each permission request, Stop once it lands.
+                from kiro_crew.messaging.script_hooks import (
+                    ScriptHookTurn,
+                    attach_spec_hooks,
+                    fire_prompt_submit,
+                    fire_stop,
+                    spec_lost_notice,
+                    with_hook_context,
+                )
+
+                _seq_hooks = ScriptHookTurn(agent_session_key, msg, store_hooks=False)
+                await attach_spec_hooks(
+                    _seq_hooks,
+                    client,
+                    step.dispatch_agent,
+                    fresh_session=is_new and not _resumed,
+                )
+                full_message = await with_hook_context(
+                    full_message, await fire_prompt_submit(_seq_hooks)
                 )
                 # Wall clock for the cron agent turn: acp never assigns
                 # TurnUsage.duration_ms, so the row falls back to this.
@@ -310,6 +360,7 @@ async def _cron_run_sequence(
                     on_complete=_seq_note_complete,
                     on_compaction=_seq_note_compaction,
                     fallback_models=configured_fallback_chain(),
+                    spec_hooks=_seq_hooks,
                 )
                 # The prompt reached the model and the turn completed, so
                 # the finally must NOT restore the re-injection flag --
@@ -318,6 +369,7 @@ async def _cron_run_sequence(
                 if _seq_landed:
                     # This step's release confirms what it received inline.
                     note_turn_landed(self.sessions, agent_session_key)
+                    await fire_stop(_seq_hooks, result_text)
                 if not result_text:
                     result_text = _gate.empty_reply_placeholder()
                 result_text = _annotate_model_fallback(
@@ -326,6 +378,10 @@ async def _cron_run_sequence(
                 _seq_missing = declared_mcp_not_ready_note(client)
                 if _seq_missing:
                     _seq_mcp_notes.append(f"⚠ {agent}: {_seq_missing}.")
+                # The spec keys this step's session lacks, once per agent.
+                _seq_lost = spec_lost_notice(_seq_hooks)
+                if _seq_lost and _seq_lost not in _seq_mcp_notes:
+                    _seq_mcp_notes.append(_seq_lost)
                 logger.info("Cron '%s': agent '%s' completed", job.name, agent)
 
                 # ── Per-turn usage row: background spend. ──
@@ -694,6 +750,20 @@ async def _cron_run_single(
             job, cron_execution, session_key, _dispatch_agent, _single_cwd, _single_crew
         )
         _acquired = True
+        from kiro_crew.messaging.script_hooks import reproject_claim
+
+        async def _reclaim() -> tuple[Any, bool, bool]:
+            nonlocal _model_downgraded
+            _c, _n, _r, _model_downgraded = await self._acquire_with_model_fallback(
+                job, cron_execution, session_key, _dispatch_agent, _single_cwd, _single_crew
+            )
+            return _c, _n, _r
+
+        # A retained session whose stale KAS batch auto-approves what a PreToolUse
+        # hook now covers is reset and claimed again, so the spec's hooks see it.
+        client, is_new, _resumed = await reproject_claim(
+            self.sessions, session_key, _dispatch_agent or "", (client, is_new, _resumed), _reclaim
+        )
         _run_provider = client
         # The job's tab reads this lease as running, and with surface_channel_sessions
         # off no reconcile pass pushes the start.
@@ -740,6 +810,23 @@ async def _cron_run_single(
             request_prefix_context=cap.prior_result or None,
             skill_trigger_text=trigger_text,
         )
+        # The agent spec's own hooks on a backend that never runs them (KAS), as
+        # on the sequence site: AgentSpawn and UserPromptSubmit on the job's own
+        # prompt, PreToolUse on each permission request, Stop once the turn lands.
+        from kiro_crew.messaging.script_hooks import (
+            ScriptHookTurn,
+            attach_spec_hooks,
+            fire_prompt_submit,
+            fire_stop,
+            spec_lost_notice,
+            with_hook_context,
+        )
+
+        _hook_turn = ScriptHookTurn(session_key, trigger_text, store_hooks=False)
+        await attach_spec_hooks(
+            _hook_turn, client, _dispatch_agent or "", fresh_session=is_new and not _resumed
+        )
+        full_message = await with_hook_context(full_message, await fire_prompt_submit(_hook_turn))
 
         # Wall clock for the cron agent turn — see the sequential site
         # above. acp reports no duration, so this is the row's fallback.
@@ -790,6 +877,7 @@ async def _cron_run_single(
             on_complete=_note_complete,
             on_compaction=_note_compaction,
             fallback_models=configured_fallback_chain(),
+            spec_hooks=_hook_turn,
         )
 
         # The prompt reached the model and the turn completed, so the
@@ -800,6 +888,7 @@ async def _cron_run_single(
             # This turn's release confirms what it received inline; a turn the
             # deadline, a stop or a reap ends first never gets here.
             note_turn_landed(self.sessions, session_key)
+            await fire_stop(_hook_turn, result_text)
 
         # Recorded, not inferred from the text: the dedup hash below
         # swaps the placeholder for its count-free twin only when the
@@ -816,6 +905,10 @@ async def _cron_run_single(
         _missing = declared_mcp_not_ready_note(client)
         if _missing:
             result_text = f"⚠ {_missing}.\n\n{result_text}"
+        # The spec keys this run's session lacks, as a dashboard chat says it.
+        _lost = spec_lost_notice(_hook_turn)
+        if _lost:
+            result_text = f"{_lost}\n\n{result_text}"
         if _directive_refusals:
             result_text = "\n\n".join([*_directive_refusals, result_text])
         # Before set_run_result and the dedup hash below, so the stored

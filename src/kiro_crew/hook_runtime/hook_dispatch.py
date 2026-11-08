@@ -199,8 +199,9 @@ async def permission_pre_tool_block(
     parent_session_key: str | None = None,
     agent_role: str | None = None,
     acp_session_id: str | None = None,
+    session_key: str | None = None,
 ) -> str | None:
-    """Run the PreToolUse hooks on a subagent or task-runner permission request.
+    """Run the PreToolUse hooks on a subagent, task-runner, cron or channel permission request.
 
     The Hooks page's hooks run on every backend, as on the chat turn loop.
     *spec_hooks* are the agent spec's own, for a turn whose backend never receives
@@ -231,6 +232,8 @@ async def permission_pre_tool_block(
     that raises blocks. With no store registered in this process the saved
     Hooks-page hooks are read from disk (:func:`persisted_hook_store`), and saved
     hooks that cannot be read block. *acp_session_id* reaches the spec hooks only.
+    *session_key* is a top-level turn's own key (a cron or channel turn), which
+    scopes each run's governance as on that turn's other hook events.
     """
     if hook_store is None:
         # No store registered in this process: the saved hooks still apply.
@@ -263,6 +266,7 @@ async def permission_pre_tool_block(
             subagent_id=subagent_id,
             parent_session_key=parent_session_key,
             agent_role=agent_role,
+            session_key=session_key,
             extra_hooks=spec_hooks,
             extra_hooks_cwd=spec_hooks_cwd,
             extra_hooks_tool_names=spec_names,

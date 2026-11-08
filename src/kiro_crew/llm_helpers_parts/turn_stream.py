@@ -11,6 +11,7 @@ patch; this module never imports it.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
@@ -67,6 +68,7 @@ from kiro_crew.sel import sel as _sel
 
 if TYPE_CHECKING:
     from kiro_crew.hooks import HookManager
+    from kiro_crew.messaging.script_hooks import ScriptHookTurn
 
 logger = logging.getLogger("kiro_crew.llm_helpers")
 
@@ -124,6 +126,7 @@ async def stream_and_collect(
     allow_image: bool = True,
     undelivered_watch_key: str = "",
     on_event: Callable[[LLMEvent], Awaitable[None]] | None = None,
+    spec_hooks: ScriptHookTurn | None = None,
 ) -> str:
     """Stream a message through an LLM provider and collect the full response.
 
@@ -217,10 +220,26 @@ async def stream_and_collect(
             ``messaging.directive_tracker.DirectiveTracker.observe``. Raising
             from it is logged and swallowed, so observation cannot fail the
             turn.
+        spec_hooks: The turn's script hooks with the session's agent spec hooks
+            attached (``messaging.script_hooks.attach_spec_hooks``). On a
+            backend that never runs the spec's hooks (KAS), its PreToolUse
+            hooks are asked first on every permission request and refuse it
+            on a block (``spec_pre_tool_refusal``), and a mid-turn agent switch
+            moves them to the new agent's. The caller fires the prompt and Stop
+            events itself.
 
     Returns:
         The complete response text.
     """
+    _spec_floor: Callable[[LLMEvent], Awaitable[str | None]] | None = None
+    _spec_switch: Callable[[LLMEvent], Awaitable[None]] | None = None
+    if spec_hooks is not None:
+        # The messaging layer sits above this one, so it is reached at call time.
+        from kiro_crew.messaging.script_hooks import observe_agent_switch, spec_pre_tool_refusal
+
+        _spec_floor = functools.partial(spec_pre_tool_refusal, spec_hooks)
+        _spec_switch = functools.partial(observe_agent_switch, spec_hooks)
+
     _undelivered_watch = None
     if undelivered_watch_key:
         from kiro_crew.undelivered_call_watch import UndeliveredCallWatch
@@ -302,6 +321,8 @@ async def stream_and_collect(
                         logger.warning(
                             "stream_and_collect: on_event observer failed", exc_info=True
                         )
+                if _spec_switch is not None:
+                    await _spec_switch(event)
                 if event.kind == EVENT_TEXT_CHUNK:
                     result_text += event.text
                     if on_chunk:
@@ -325,6 +346,7 @@ async def stream_and_collect(
                             on_decision=lambda outcome, mech, why: _decision.append(
                                 (outcome, mech, why)
                             ),
+                            **({} if _spec_floor is None else {"spec_floor": _spec_floor}),
                         )
                     if on_tool_gate:
                         _mech, _why = _decision[-1][1:] if _decision else ("", "")

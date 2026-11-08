@@ -238,6 +238,18 @@ async def _fire_slack_inner_nudge(
         else:
             client, is_new, _resumed = await self.sessions.get_or_create(key, wait_if_busy=False)
         _acquired = True
+        from kiro_crew.messaging.script_hooks import reproject_claim
+
+        # A stale KAS batch is reset and claimed again under this wake's lease, so
+        # the spec's PreToolUse hooks see every call they cover.
+        sessions_ = self.sessions
+        client, is_new, _resumed = await reproject_claim(
+            sessions_,
+            key,
+            _get_agent_for_session(key) or "",
+            (client, is_new, _resumed),
+            lambda: sessions_.get_or_create(key),
+        )
         _provider = self._cfg.agent.provider if hasattr(self, "_cfg") else "acp"
         # An auto-nudge cycle continues the NUDGED session's own conversation,
         # so it reads that session's silo — resolved from its recorded binding,
@@ -256,6 +268,24 @@ async def _fire_slack_inner_nudge(
             resumed=_resumed,
             skill_trigger_text=trigger_text,
         )
+        # The session agent's own spec hooks on a backend that never runs them
+        # (KAS), as on a channel turn of this session. The Hooks page's hooks do
+        # not run on a wake.
+        from kiro_crew.messaging.script_hooks import (
+            ScriptHookTurn,
+            attach_spec_hooks,
+            fire_prompt_submit,
+            fire_stop_if_succeeded,
+            with_hook_context,
+        )
+
+        _hook_turn = ScriptHookTurn(key, tagged, store_hooks=False)
+        await attach_spec_hooks(
+            _hook_turn,
+            client,
+            _get_agent_for_session(key) or "",
+            fresh_session=is_new and not _resumed,
+        )
         _completion_hook = self._monitor_completion_hook(loop)
         if wake_message is not None and _completion_hook is None:
             return MonitorDispatchResult.UNAVAILABLE
@@ -265,8 +295,12 @@ async def _fire_slack_inner_nudge(
         _turn_t0 = time.monotonic()
         _turn_started = True
         if wake_message is None:
+            # The completion's stop reason, empty until one is observed: a stream
+            # that ends without one fires no Stop.
+            _stop_reason: list[str] = []
 
             def _capture_raw_completion(event: LLMEvent) -> None:
+                _stop_reason[:] = [str(event.stop_reason or "")]
                 if is_monitor_completion_evidence(
                     event.stop_reason,
                     synthetic=event.synthetic_completion,
@@ -285,6 +319,7 @@ async def _fire_slack_inner_nudge(
                 ),
                 audit_caller="slack_nudge",
             )
+            full_msg = await with_hook_context(full_msg, await fire_prompt_submit(_hook_turn))
             response = await asyncio.wait_for(
                 stream_and_collect(
                     client,
@@ -303,6 +338,7 @@ async def _fire_slack_inner_nudge(
                     on_complete=_capture_raw_completion,
                     undelivered_watch_key=key,
                     on_event=directive_event_observer(_directives),
+                    spec_hooks=_hook_turn,
                 ),
                 timeout=_NUDGE_TURN_TIMEOUT,
             )
@@ -311,6 +347,8 @@ async def _fire_slack_inner_nudge(
                 # is the reply, not any text the provider streams around it.
                 # Keep both Slack delivery and replay quiet.
                 response = ""
+            if _stop_reason:
+                await fire_stop_if_succeeded(_hook_turn, _stop_reason[0], response)
         else:
 
             async def _capture_completion(completion: Any) -> None:
@@ -354,6 +392,7 @@ async def _fire_slack_inner_nudge(
                 # other channel constructors.
                 audit_session_key=key,
                 audit_agent=_get_agent_for_session(key) or "kirocrew",
+                script_hooks=_hook_turn,
             )
             response = await asyncio.wait_for(
                 driver.run(full_msg),

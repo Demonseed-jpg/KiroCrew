@@ -62,7 +62,7 @@ from kiro_crew.messaging.driver import APPROVAL_INTERACTIVE
 from kiro_crew.messaging.inbound_spool import InboundRoute, spool_refused_turn
 from kiro_crew.messaging.link import DM_SCOPE_UNIFIED, channel_namespace_of
 from kiro_crew.messaging.renderer import SilentRenderer
-from kiro_crew.messaging.script_hooks import ScriptHookTurn
+from kiro_crew.messaging.script_hooks import ScriptHookTurn, attach_spec_hooks, reproject_claim
 from kiro_crew.messaging.session_resume import persisted_session_agent
 from kiro_crew.messaging.session_trust import is_session_trusted
 from kiro_crew.messaging.turn_ceiling import TurnCeilingExceeded
@@ -222,6 +222,21 @@ async def _run_turn(
             model=(None if resumed_key is not None else _pick_before or None),
         )
         _acquired = True
+        # A stale KAS batch is reset and claimed again, so the spec's PreToolUse
+        # hooks see every call they cover.
+        provider, is_new, resumed = await reproject_claim(
+            self.sessions,
+            session_key,
+            agent or "",
+            (provider, is_new, resumed),
+            lambda: self.sessions.get_or_create(
+                session_key,
+                start_priority=person_priority(msg.person_origin),
+                agent=agent,
+                channel_id=channel_id,
+                model=(None if resumed_key is not None else _pick_before or None),
+            ),
+        )
         # Whose chat this turn answers and on which provider, for the mid-turn
         # steer check. A tuple of this turn's own, so the finally removes this
         # record and never a later turn's that took the key after a reset.
@@ -229,6 +244,9 @@ async def _run_turn(
         self._turn_chats[session_key] = turn_chat
         # Taken on acquisition: a Stop from here on cancels the turn before it streams.
         hook_turn = ScriptHookTurn.stoppable(self.sessions, session_key, text)
+        await attach_spec_hooks(
+            hook_turn, provider, agent or "", fresh_session=is_new and not resumed
+        )
         # Hold the provider this turn obtained, for the failure handler's
         # attribution question. Captured HERE rather than looked up when a
         # failure is handled: the recovery paths replace a dead session, so a

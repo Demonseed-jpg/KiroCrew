@@ -54,7 +54,7 @@ from kiro_crew.messaging.driver import APPROVAL_INTERACTIVE, TurnDriver
 from kiro_crew.messaging.identity import channel_inbound_permitted, publish_turn_identity
 from kiro_crew.messaging.inbound_spool import InboundRoute, spool_refused_turn
 from kiro_crew.messaging.link import SLACK_NAMESPACE, canonical_key
-from kiro_crew.messaging.script_hooks import ScriptHookTurn
+from kiro_crew.messaging.script_hooks import ScriptHookTurn, attach_spec_hooks, reproject_claim
 from kiro_crew.messaging.turn_ceiling import TurnCeilingExceeded
 from kiro_crew.parent_turns import note_turn_landed
 from kiro_crew.platform import current_context
@@ -733,11 +733,26 @@ async def handle_message_transport(
             session_key, channel_id=channel, start_priority=start_priority, **_alloc
         )
         _acquired = True
+        # A stale KAS batch is reset and claimed again, so the spec's PreToolUse
+        # hooks see every call they cover.
+        _claim = await reproject_claim(
+            sessions,
+            session_key,
+            str(_alloc.get("agent") or ""),
+            (client, is_new, resumed),
+            lambda: sessions.get_or_create(
+                session_key, channel_id=channel, start_priority=start_priority, **_alloc
+            ),
+        )
+        client, is_new, resumed = _claim
         # Taken on acquisition: a Stop from here on cancels the turn before it streams.
-        hook_turn = (
-            ScriptHookTurn.stoppable(sessions, session_key, text)
-            if runs_script_hooks(channel, user_id)
-            else None
+        # The Hooks page's hooks run for the operator's 1:1 DM only; the agent
+        # spec's own run on every turn of the session, as under its own harness.
+        hook_turn = ScriptHookTurn.stoppable(
+            sessions, session_key, text, store_hooks=runs_script_hooks(channel, user_id)
+        )
+        await attach_spec_hooks(
+            hook_turn, client, str(_alloc.get("agent") or ""), fresh_session=is_new and not resumed
         )
         # Authorize the outbound-image root, which only exists once the provider
         # does. Unauthorized, `_upload_root` stays empty and `_uploads_enabled()`
@@ -987,9 +1002,8 @@ async def handle_message_transport(
             user_logged=_logged_user_turn,
             provenance={"source_thread": session_key, "source_user": user_id, "agent": _agent},
         )
-        if hook_turn is not None:
-            # The hooks match the sender's text as the turn sends it.
-            hook_turn.prompt = text
+        # The hooks match the sender's text as the turn sends it.
+        hook_turn.prompt = text
         driver = TurnDriver(
             client,
             TeeRenderer(renderer, _live) if _live is not None else renderer,

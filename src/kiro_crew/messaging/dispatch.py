@@ -122,7 +122,7 @@ from kiro_crew.messaging.renderer import (
     Renderer,
     SilentRenderer,
 )
-from kiro_crew.messaging.script_hooks import ScriptHookTurn
+from kiro_crew.messaging.script_hooks import ScriptHookTurn, attach_spec_hooks, reproject_claim
 from kiro_crew.messaging.session_resume import persisted_session_agent
 from kiro_crew.messaging.turn_bracket import consume_reinjection  # noqa: F401 (re-exported)
 from kiro_crew.messaging.turn_bracket import driver_turn_landed  # noqa: F401 (re-exported)
@@ -896,15 +896,18 @@ class ChannelTurns:
             # One per inbound message, so a replay below does not run
             # UserPromptSubmit again. The operator's hooks run for the operator's
             # own conversation only: a guest or a room others read gets none, as it
-            # gets none of the operator's private context.
+            # gets none of the operator's private context. The agent spec's own
+            # hooks run wherever the agent does, as under its own harness; a
+            # sender the channel does not trust runs a tool-free agent instead.
             hook_turn = (
                 None
-                if deny_all_tools or minimal_context
+                if deny_all_tools
                 else ScriptHookTurn(
                     session_key,
                     text,
                     cancelled=lambda: session_stop_generation(sessions, session_key)
                     != stop_gen_at_entry,
+                    store_hooks=not minimal_context,
                 )
             )
             while True:
@@ -943,6 +946,30 @@ class ChannelTurns:
                         self._open_crew_log(provider, session_key, agent, resumed, crew_log_store)
                 # The wake's claim serves its first attempt only; a replay reacquires.
                 claimed = False
+                if hook_turn is not None:
+                    # A KAS session whose batch auto-approves what a PreToolUse
+                    # hook now covers is reset and claimed again, under the lease,
+                    # so the spec's hooks see those calls; as on the dashboard.
+                    _claimed_provider = provider
+                    provider, is_new, resumed = await reproject_claim(
+                        sessions,
+                        session_key,
+                        session_agent,
+                        (provider, is_new, resumed),
+                        lambda: sessions.get_or_create(
+                            session_key,
+                            agent=session_agent,
+                            channel_id=asker.conversation_id,
+                            start_priority=asker.start_priority,
+                            **extra,
+                        ),
+                    )
+                    if provider is not _claimed_provider:
+                        _turn_provider = provider
+                        if self._opens_crew_log(asker):
+                            self._open_crew_log(
+                                provider, session_key, agent, resumed, crew_log_store
+                            )
                 if deny_all_tools:
                     await _refuse_unless_toolless(
                         sessions,
@@ -1071,6 +1098,11 @@ class ChannelTurns:
                     # A wake has nobody waiting on it, and a refused one stops its monitor.
                     _admission_timeout=None if monitor else TURN_BUILD_ADMISSION_TIMEOUT_SECS,
                 )
+                if hook_turn is not None:
+                    # Read for this attempt's provider: a replay runs a fresh one.
+                    await attach_spec_hooks(
+                        hook_turn, provider, agent, fresh_session=is_new and not resumed
+                    )
                 # A monitor wake runs with nobody watching: a governance check
                 # that cannot be evaluated refuses the call.
                 tool_gate = build_tool_gate(

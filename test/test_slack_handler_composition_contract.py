@@ -1099,8 +1099,8 @@ def test_a_counted_construct_keeps_its_count_in_its_home() -> None:
     ladder = _owner_sources()["permission_ladder"]
     assert _calls_in(ladder, "_answer_permission_request", "approve_tool") == 4
     assert _calls_in(ladder, "handle_interaction", "approve_tool") == 1  # permission floor
-    assert ladder.count(".reject_tool(") == 4  # test_messaging_deny_notice
-    assert ladder.count("await _steer_host_deny(") == 2  # test_messaging_deny_notice
+    assert ladder.count(".reject_tool(") == 5  # test_messaging_deny_notice
+    assert ladder.count("await _steer_host_deny(") == 3  # test_messaging_deny_notice
     hook_gates = r"await run_in_tool_gate_pool\(\s*context_builder\.hooks\.on_tool_call,"
     assert len(re.findall(hook_gates, ladder)) == 2  # test_hooks
     persists = [s.count("save_conversation_turn_off_loop(") for s in _holder_sources().values()]

@@ -724,6 +724,8 @@ _SURFACES = {
         steer=r"^\s*await _steer_host_deny\(",
         audit=r"^\s*sel\(\)\.log_tool_invocation\(",
         sites=(
+            # _answer_permission_request: the agent spec's PreToolUse hook blocked.
+            _Site('error="spec_hook"', "host"),
             # _answer_permission_request: the PreToolUse hook said deny -- a host verdict.
             _Site('error="hook_deny"', "host"),
             # _reject_orphaned_tool: teardown answers a wire the fallback arms
@@ -758,6 +760,7 @@ _SURFACES = {
         audit=r"^\s*sel\(\)\.log_api_access\(",
         sites=(
             _Site("reason=untrusted_sender", "host"),
+            _Site("reason=spec_hook", "host"),
             _Site("reason=hook_deny", "host"),
             # The decider said no. ``_steer_deny_cause`` steers ONLY when the
             # decider recorded a host cause (an expired prompt); a human's Deny

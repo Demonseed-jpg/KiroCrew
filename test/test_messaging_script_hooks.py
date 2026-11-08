@@ -217,7 +217,10 @@ def test_shared_pipeline_hands_the_driver_the_sender_text(monkeypatch):
     "posture", [{"deny_all_tools": True}, {"minimal_context": True}], ids=["guest", "shared"]
 )
 def test_shared_pipeline_runs_no_hooks_for_a_guest_or_shared_room(monkeypatch, posture):
-    """The operator's hooks run only in the operator's own conversation."""
+    """The operator's hooks run only in the operator's own conversation.
+
+    A shared room still carries the turn for the agent spec's own hooks, with the
+    Hooks page's withheld; a guest's tool-free turn carries none."""
     import dataclasses
 
     from test_messaging_dispatch import _CtxBuilder, _Driver, _patch_pipeline, _Renderer, _Sessions
@@ -244,7 +247,11 @@ def test_shared_pipeline_runs_no_hooks_for_a_guest_or_shared_room(monkeypatch, p
     monkeypatch.setattr(D, "_refuse_unless_toolless", _toolless_ok)
     turn = dataclasses.replace(_channel_turn(_Renderer()), **posture)
     asyncio.run(D.drive_turn(turn, sessions=_Sessions(), ctx_builder=_CtxBuilder()))
-    assert seen == [None]
+    assert len(seen) == 1
+    if posture.get("deny_all_tools"):
+        assert seen == [None]
+    else:
+        assert seen[0] is not None and seen[0].store_hooks is False
 
 
 def _passthrough_sandbox(monkeypatch):

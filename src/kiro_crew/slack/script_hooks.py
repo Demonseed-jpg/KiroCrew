@@ -8,17 +8,22 @@ trusted bot's message runs none.
 
 The transport path (``transport_dispatch.py``) hands a :class:`ScriptHookTurn` to its
 ``TurnDriver``. The native path (``handler_runtime/turn.py``) streams without one, so
-it fires the same two events through the helpers below.
+it fires the same two events through the helpers below, and asks the agent spec's
+PreToolUse hooks through ``spec_pre_tool_refusal`` (``permission_ladder.py``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from kiro_crew.messaging.script_hooks import (
+from kiro_crew.messaging.script_hooks import (  # noqa: F401 - the native path's names
     ScriptHookTurn,
+    attach_spec_hooks,
     fire_prompt_submit,
     fire_stop_if_succeeded,
+    observe_agent_switch,
+    reproject_claim,
+    spec_pre_tool_refusal,
     with_hook_context,
 )
 
@@ -43,16 +48,21 @@ def native_hook_turn(
     session_key: str,
     prompt: str,
     cancelled: Callable[[], bool],
-) -> ScriptHookTurn | None:
-    """The native Slack turn's hooks, or ``None`` when this message runs none.
+) -> ScriptHookTurn:
+    """The native Slack turn's hooks.
 
-    *cancelled* is the turn's own Stop check, bound to the Stop generation the
-    native handler captured when it took the session (a replay keeps the first
-    attempt's).
+    The Hooks page's run only where :func:`runs_script_hooks` says; the agent
+    spec's own, once :func:`attach_spec_hooks` reads them, on every turn of the
+    session, as under the agent's own harness. *cancelled* is the turn's own Stop
+    check, bound to the Stop generation the native handler captured when it took
+    the session (a replay keeps the first attempt's).
     """
-    if not runs_script_hooks(channel, sender_id):
-        return None
-    return ScriptHookTurn(session_key, prompt, cancelled=cancelled)
+    return ScriptHookTurn(
+        session_key,
+        prompt,
+        cancelled=cancelled,
+        store_hooks=runs_script_hooks(channel, sender_id),
+    )
 
 
 async def prompt_with_hooks(hook_turn: ScriptHookTurn, prompt: str, message: str) -> str:

@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable
 
 from kiro_crew import name_grant
 from kiro_crew.acp.types import (
+    EVENT_AGENT_SWITCHED,
     EVENT_COMPACTION_STATUS,
     EVENT_COMPLETE,
     EVENT_PERMISSION_REQUEST,
@@ -85,6 +86,8 @@ from kiro_crew.messaging.script_hooks import (
     ScriptHookTurn,
     fire_prompt_submit,
     fire_stop,
+    observe_agent_switch,
+    spec_pre_tool_refusal,
     with_hook_context,
 )
 from kiro_crew.monitoring.completion import (
@@ -599,7 +602,8 @@ class TurnDriver:
         script_hooks: ScriptHookTurn | None = None,
     ) -> None:
         self.provider = provider
-        # The Hooks page's UserPromptSubmit and Stop hooks for this turn
+        # The Hooks page's UserPromptSubmit and Stop hooks for this turn, and the
+        # agent spec's own hooks where Crew fires them, PreToolUse included
         # (:mod:`kiro_crew.messaging.script_hooks`). None fires none.
         self.script_hooks = script_hooks
         self.renderer = renderer
@@ -940,7 +944,10 @@ class TurnDriver:
                 except Exception:
                     logger.debug("driver: event tap failed; the turn goes on", exc_info=True)
             kind = event.kind
-            if kind == EVENT_TEXT_CHUNK:
+            if kind == EVENT_AGENT_SWITCHED:
+                # The requests that follow are gated by the new agent's spec hooks.
+                await observe_agent_switch(self.script_hooks, event)
+            elif kind == EVENT_TEXT_CHUNK:
                 filtered = compaction_filter.feed(event.text or "")
                 if filtered:
                     await dispatch_frames(steering_filter.feed(filtered))
@@ -1095,6 +1102,26 @@ class TurnDriver:
                         "than its operator; no tool runs on this turn",
                         cause=DENY_CAUSE_SURFACE_POLICY,
                         audited=True,
+                    )
+                    await self.provider.reject_tool(event.request_id)
+                    continue
+                # The agent spec's own PreToolUse hooks, on a backend that never
+                # runs them (KAS): first, as on the sub-agent and task-runner
+                # ladders. They only ever refuse, never approve.
+                _spec_refusal = await spec_pre_tool_refusal(self.script_hooks, event)
+                if _spec_refusal is not None:
+                    sel().log_api_access(
+                        caller="turn_driver",
+                        operation="tool_permission",
+                        outcome="denied",
+                        source="messaging",
+                        resources=(
+                            f"request_id={event.request_id} "
+                            f"mode={self.approval_mode} reason=spec_hook"
+                        ),
+                    )
+                    await self._steer_host_deny(
+                        event, _spec_refusal, cause=DENY_CAUSE_POLICY, audited=True
                     )
                     await self.provider.reject_tool(event.request_id)
                     continue
