@@ -1386,7 +1386,7 @@ stops landing on the enterprise-shared standard pool.
 **What reaches this leg is mostly NOT fork traffic, which is the thing to
 measure rather than assume.** The fleet branch admits the `pull_request` actions
 `opened` and `synchronize` only, and these workflows subscribe to more than
-that: `code-review.yml` and `pr-hygiene.yml` add `reopened` and `edited`,
+that: `code-review.yml` adds `reopened`, `pr-hygiene.yml` adds `reopened` and `edited`,
 `pr-policy.yml` adds `reopened`, `edited`, `labeled` and `unlabeled`,
 `dependency-review.yml` adds `reopened`, `labeled` and `unlabeled`,
 `macos-on-demand.yml` adds `reopened` and `labeled`, and `codeql.yml` adds
@@ -2904,16 +2904,16 @@ No model, no secrets, so it is safe on forks and always runs. It is the grep-hal
 of the AUTOSDE rules; the semantic half is delegated to the line reviewers.
 
 Its three diff jobs read the diff and nothing else. `pr-hygiene`, which judges
-the title and body, is the whole of `pr-hygiene.yml`. Both files hear `edited`
-and both are readiness lanes.
+the title and body, is the whole of `pr-hygiene.yml`. Both are readiness lanes;
+only `pr-hygiene.yml` hears `edited`.
 
-`code-review.yml` keeps `edited` because a base retarget is an `edited` event,
-and a retarget moves the diff the scans read. So a title or body edit re-runs
-the scans too. They cannot skip it: Readiness keeps a lane's newest run, so a
-run with the scans skipped would replace one whose scan failed (#26840). And
-without `edited`, a head could keep a scan made against an earlier base. Letting
-an edit skip the scans needs Readiness to check which base a run scanned
-(#31076).
+A title or body edit starts no Code Review run, so the last scan stays the
+lane's verdict, a failed one included. A base retarget is an `edited` event too,
+and it moves the diff the scans read. So each run records the base it scanned in
+its run-name (`[base <ref>]`), and Readiness counts the newest run only while
+that base is the PR's current base. A run of another base, or one with no base
+recorded, reads `scanned <base>; push or reopen` and holds the PR pending until a
+push or reopen rescans it (#31076).
 
 - **`autosde-rules`** blocks unambiguous frontend violations on added lines: an
   inline `<svg viewBox>` outside brand-mark components (`KiroGhost.tsx`, `*Logo.tsx`,
