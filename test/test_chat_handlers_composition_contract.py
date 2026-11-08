@@ -533,6 +533,7 @@ _OWNER_MODULES = frozenset(
         "chat_send",
         "conductor_close",
         "continue_turn",
+        "crew_steer",
         "followup_card",
         "handover_drain",
         "pending_context",
@@ -819,8 +820,8 @@ chat_send | _sweep_stale_permissions | function | (slot: "'_ChatSlot'") -> 'None
 chat_send | _send_binds_agent | function | (agent: 'str', slot: 'Any') -> 'bool'
 chat_send | _send_writes_persona | function | (body: 'dict') -> 'bool'
 chat_send | _send_harness_command | async function | (message: 'str', state: 'DashboardState', slot: '_ChatSlot') -> 'str'
-chat_send | steer_is_auto | function | (value: 'object') -> 'bool'
-chat_send | decided_message_handling | async function | (slot: 'Any', message: 'str') -> 'tuple[bool, dict | None]'
+crew_steer | steer_is_auto | function | (value: 'object') -> 'bool'
+crew_steer | decided_message_handling | async function | (slot: 'Any', message: 'str') -> 'tuple[bool, dict | None]'
 chat_send | api_chat | async function | (request: 'web.Request') -> 'web.StreamResponse'
 sse_write | write_sse_or_abort | async function | (request: 'web.Request', resp: 'web.StreamResponse', data: 'bytes') -> 'None'
 app_admission | _app_slot_acquisition_denial | async function | (request: 'web.Request', state: "'DashboardState'", request_app: 'str', slot_name: 'str', operation: 'str', *, session_grant_route: 'bool') -> 'tuple[web.Response | None, Any]'
