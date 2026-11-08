@@ -9,12 +9,18 @@ import threading
 from pathlib import Path
 
 from kiro_crew import page_cache
+from kiro_crew.testing import wait
 
 
 def _wait_for(threads_before: set[int], name: str) -> None:
+    # The lost-run bound is half the running test's timeout, not a tuned literal:
+    # a fixed literal join timeout is a determinism-contract D8 miss, and this is
+    # the named, cited ceiling the suite uses everywhere else.
+    bound = wait.default_timeout()
     for thread in threading.enumerate():
         if thread.name == name and thread.ident not in threads_before:
-            thread.join(5)
+            thread.join(timeout=bound)
+            assert not thread.is_alive(), f"{name} thread still running after {bound:.0f}s"
 
 
 def _record_child_reads(monkeypatch) -> list[tuple[list[str], str]]:
