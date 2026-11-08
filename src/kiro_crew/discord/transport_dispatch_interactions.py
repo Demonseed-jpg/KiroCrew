@@ -27,6 +27,14 @@ import time
 from typing import TYPE_CHECKING
 
 from kiro_crew.discord.commands import build_help_text
+from kiro_crew.discord.guests import (
+    GUEST_BUTTON_REFUSAL,
+    GUEST_REFUSAL,
+    guest_help_text,
+    is_admitted,
+    is_guest,
+    is_operator_only,
+)
 from kiro_crew.discord.renderer import (
     DiscordApprovalDecider,
     _redact_transformed,
@@ -59,14 +67,20 @@ _UNTAGGED_OPTIONS_REFUSAL = (
 async def on_interaction(self: DiscordDispatcher, itx: "DiscordInteraction") -> None:
     """Route an interaction: a slash command, an approval, or a choice."""
     assert self.client is not None
-    # Auth first (deny-by-default short-circuit).
-    if not self._authorized(itx.user_id):
+    # Auth first (deny-by-default short-circuit). A guest is admitted only far
+    # enough to press a choice button under its own replies and to ask for help:
+    # a tool approval, a session or model picker and every other command are
+    # refused below, before anything resolves.
+    guest = is_guest(self, itx.user_id)
+    if not (self._authorized(itx.user_id) or guest):
         return
     thread_id = itx.channel_id if itx.guild_id else ""
     # The same actionable-interaction decision is re-used by the spawn
     # approval timeout path. If a condition here can drop every press, an
     # unpressed spawn wait must observe it before reporting a user denial.
-    interaction_actionable = await self._interaction_actionable(itx.user_id, thread_id)
+    interaction_actionable = await self._interaction_actionable(
+        itx.user_id, thread_id, allow_guest=guest
+    )
     if not itx.guild_id:
         # A DM interaction names its peer, and every callback below answers
         # that SAME channel without ever opening it, so this is where the
@@ -132,6 +146,19 @@ async def on_interaction(self: DiscordDispatcher, itx: "DiscordInteraction") -> 
         await self._on_command_interaction(itx)
         return
 
+    if guest and not (itx.custom_id or "").startswith("opt:"):
+        # Not an ``[OPTIONS:]`` choice, so it is an approval, a picker or something
+        # forged: none of them is a guest's to press. Answered ephemerally so the
+        # presser is told why nothing happened, and nothing resolves.
+        await self.client.respond_interaction(
+            itx.interaction_id,
+            itx.interaction_token,
+            GUEST_BUTTON_REFUSAL,
+            ephemeral=True,
+            destination=itx.channel_id,
+        )
+        return
+
     # Ack FIRST (after auth) to dismiss Discord's "interaction failed" state —
     # the governance check below does off-loop profile-store I/O that can, on a
     # slow FS, exceed Discord's ~3s interaction-ack deadline. Acking is a no-op
@@ -170,7 +197,7 @@ async def on_interaction(self: DiscordDispatcher, itx: "DiscordInteraction") -> 
         if not await channel_inbound_permitted("discord"):
             logger.info("discord interaction dropped: denied by channels governance policy")
             return
-        if not self._authorized(itx.user_id) or (
+        if not is_admitted(self, itx.user_id) or (
             itx.guild_id and thread_id not in self._allowed_threads
         ):
             logger.info(
@@ -364,9 +391,16 @@ async def on_interaction(self: DiscordDispatcher, itx: "DiscordInteraction") -> 
         )
 
 
-async def _interaction_actionable(self: DiscordDispatcher, user_id: str, thread_id: str) -> bool:
-    """Whether this user could resolve an interaction at this destination."""
-    if not self._authorized(user_id):
+async def _interaction_actionable(
+    self: DiscordDispatcher, user_id: str, thread_id: str, *, allow_guest: bool = False
+) -> bool:
+    """Whether this user could resolve an interaction at this destination.
+
+    ``allow_guest`` is passed only by the interaction router, for a guest's own
+    choice press. The spawn-approval path leaves it off: a guest cannot answer a
+    spawn prompt, so one must not count as somebody who still could.
+    """
+    if not (self._authorized(user_id) or (allow_guest and is_guest(self, user_id))):
         return False
     if not thread_id:
         return True
@@ -428,6 +462,17 @@ async def _on_command_interaction(self: DiscordDispatcher, itx: "DiscordInteract
     assert self.client is not None
     name = itx.command_name
     thread_id = itx.channel_id if itx.guild_id else ""
+    if is_guest(self, itx.user_id) and (is_operator_only(name) or name == "help"):
+        # Decided before any handler or replay: the slash form must not reach what
+        # the ``!`` form is refused. Ephemeral, like every slash reply.
+        await self.client.respond_interaction(
+            itx.interaction_id,
+            itx.interaction_token,
+            GUEST_REFUSAL if is_operator_only(name) else guest_help_text(),
+            ephemeral=True,
+            destination=itx.channel_id,
+        )
+        return
     if name in _REPLY_COMMANDS:
         await self._run_reply_command(
             name,

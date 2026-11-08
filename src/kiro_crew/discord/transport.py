@@ -28,6 +28,7 @@ from kiro_crew.discord.client import (
     DiscordInbound,
     SendPermission,
 )
+from kiro_crew.discord.guests import BotTurnGuard, effective_guests
 from kiro_crew.messaging.identity import channel_inbound_permitted
 from kiro_crew.messaging.outbound_files import ExtractLimits, OutboundFile
 from kiro_crew.messaging.tables import TABLE_POLICY_AUTO
@@ -133,11 +134,19 @@ class DiscordTransport(MessagingTransport):
         auto_thread: bool = True,
         on_thread_created: Callable[[str], None] | None = None,
         dispatch: DispatchFn | None = None,
+        guest_user_ids: Iterable[str] = (),
+        bot_turn_guard: BotTurnGuard | None = None,
     ) -> None:
         self._client = client
         # Deny-by-default: freeze both allow-lists as snowflake strings so they
         # cannot mutate under an in-flight authorization decision.
         self._allowed: frozenset[str] = frozenset(str(u) for u in allowed_user_ids)
+        # The guest list as configured. What counts is :attr:`_guests`, which drops
+        # every operator: a user in both lists is an operator.
+        self._guest_listed: frozenset[str] = frozenset(
+            str(u).strip() for u in guest_user_ids if str(u).strip()
+        )
+        self._bot_turn_guard = bot_turn_guard or BotTurnGuard()
         # Mutable: an approved user's message in an allowed channel can promote
         # itself into a brand-new thread at runtime (see ``receive`` below), and
         # that thread must immediately become valid for the user's own follow-up
@@ -164,6 +173,24 @@ class DiscordTransport(MessagingTransport):
         # Installed here and not in the gateway so a transport built anywhere -- a
         # unit harness included -- carries the same mid-send contract.
         client.still_permitted = self._still_may_send_to
+        self._sync_client_guests()
+
+    @property
+    def _guests(self) -> frozenset[str]:
+        """The guests in force: the configured list minus every operator."""
+        return effective_guests(self._guest_listed, self._allowed)
+
+    def is_guest(self, user_id: str) -> bool:
+        """Whether *user_id* is admitted as a guest (and is not an operator)."""
+        return bool(user_id) and user_id in self._guests
+
+    def _admits(self, user_id: str) -> bool:
+        """Whether *user_id* may talk to the bot at all: an operator or a guest."""
+        return bool(user_id) and (user_id in self._allowed or user_id in self._guests)
+
+    def _sync_client_guests(self) -> None:
+        """Tell the client which bot accounts to deliver instead of drop."""
+        self._client.guest_bot_ids = self._guests
 
     @property
     def client(self) -> DiscordClient:
@@ -213,6 +240,26 @@ class DiscordTransport(MessagingTransport):
                 source="discord",
                 resources=f"added={added} removed={removed} size={len(users)}",
             )
+        if hasattr(section, "guest_user_ids"):
+            guests = _coerce_snowflakes(section.guest_user_ids)
+            if guests is None:
+                logger.warning(
+                    "discord: guest_user_ids is not a list in the reloaded config; keeping the "
+                    "previous guest list (%d id(s))",
+                    len(self._guest_listed),
+                )
+            elif guests != self._guest_listed:
+                added, removed = len(guests - self._guest_listed), len(self._guest_listed - guests)
+                self._guest_listed = guests
+                logger.info("discord: guest list reloaded (+%d/-%d id(s))", added, removed)
+                sel().log_api_access(
+                    caller="config",
+                    operation="discord_transport.reconfigure",
+                    outcome="guest_list_changed",
+                    source="discord",
+                    resources=f"added={added} removed={removed} size={len(guests)}",
+                )
+        self._sync_client_guests()
         channels = _coerce_snowflakes(getattr(section, "allowed_channel_ids", None))
         if channels is None:
             logger.warning(
@@ -492,7 +539,10 @@ class DiscordTransport(MessagingTransport):
             return SendPermission.allow()
         peer = self._client.cached_dm_recipient(channel_id)
         if peer is not None:
-            if peer in self._allowed:
+            # A guest's DM is a destination too: the reply to their own message goes
+            # there. Proactive sends never target it (``may_send_to`` and the
+            # configured targets name operators only).
+            if self._admits(peer):
                 return SendPermission.allow()
             return SendPermission.revoked()
         return SendPermission.unattributable()
@@ -571,7 +621,7 @@ class DiscordTransport(MessagingTransport):
         origin = await self._client.thread_origin(thread_id)
         if (
             thread_id in self._revoked_threads
-            or caller not in self._allowed
+            or not self._admits(caller)
             or origin is None
             or origin.channel_type not in _AUTO_THREAD_TYPES
             or origin.owner_id != bot_user_id
@@ -592,8 +642,13 @@ class DiscordTransport(MessagingTransport):
 
     # -- Inbound adapter ----------------------------------------------------
     def authorize(self, msg: InboundMessage) -> bool:
-        """Owner-only, deny-by-default. Empty allow-list authorizes nobody."""
-        allowed = bool(msg.user_id) and msg.user_id in self._allowed
+        """Operators and listed guests only, deny-by-default.
+
+        Empty allow-lists authorize nobody. Whether an admitted sender is an operator
+        or a guest is decided again where it matters (the dispatcher), so passing here
+        grants no authority beyond a tool-less chat.
+        """
+        allowed = self._admits(msg.user_id)
         if not allowed:
             # Audit ALL denials (including empty/missing user_id) so
             # deny-by-default is observable, mirroring TelegramTransport.
@@ -604,6 +659,34 @@ class DiscordTransport(MessagingTransport):
                 source="discord",
             )
         return allowed
+
+    def _bot_may_start_turn(self, inbound: DiscordInbound) -> bool:
+        """Whether a message from a bot account may start a turn.
+
+        Fails closed at every step, and only the last one records anything:
+
+        * the bot must be a listed guest and not an operator -- the client already
+          drops the rest, and this re-checks because the rosters can move between
+          that drop and here;
+        * it must be a server message: a bot cannot DM another bot;
+        * it must address THIS bot by mentioning it or replying to it, so a listed
+          bot merely talking in an approved thread is never answered;
+        * the conversation's :class:`BotTurnGuard` must have budget, which is what
+          stops two bots answering each other forever.
+        """
+        if not self.is_guest(inbound.user_id) or not inbound.guild_id:
+            return False
+        if not (inbound.mentions_bot or inbound.replies_to_bot):
+            return False
+        if not self._bot_turn_guard.admit(inbound.channel_id):
+            sel().log_api_access(
+                caller=inbound.user_id,
+                operation="discord_transport.receive",
+                outcome="denied_bot_turn_limit",
+                source="discord",
+            )
+            return False
+        return True
 
     async def receive(self, raw_envelope: Any) -> None:
         """Normalize -> authorize -> dispatch.
@@ -619,6 +702,12 @@ class DiscordTransport(MessagingTransport):
         inbound = raw_envelope
         if not inbound.text and not inbound.attachments:
             return
+        if inbound.is_bot:
+            if not self._bot_may_start_turn(inbound):
+                return
+        elif self._admits(inbound.user_id):
+            # A person speaking ends any bot-to-bot chain in this conversation.
+            self._bot_turn_guard.note_person(inbound.channel_id)
         thread_id: str | None = None
         conversation_id = inbound.channel_id
         if inbound.guild_id:
@@ -628,7 +717,7 @@ class DiscordTransport(MessagingTransport):
             # an unapproved thread. Messages in configured threads still pass
             # through the normal user authorization audit below.
             if inbound.channel_id in self._allowed_channels:
-                if inbound.user_id not in self._allowed:
+                if not self._admits(inbound.user_id):
                     # Reuse the normal denial audit without creating a shared
                     # channel thread for an unauthorized sender.
                     self.authorize(
@@ -703,7 +792,7 @@ class DiscordTransport(MessagingTransport):
             elif inbound.channel_id not in self._allowed_threads:
                 # Only an approved sender can cost a REST lookup here, so
                 # background chatter in unrelated threads stays network-free.
-                if inbound.user_id not in self._allowed:
+                if not self._admits(inbound.user_id):
                     return
                 if not await self.readmit_own_thread(inbound.channel_id, inbound.user_id):
                     sel().log_api_access(

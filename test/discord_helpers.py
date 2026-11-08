@@ -339,6 +339,7 @@ class FakeSessions:
         self.failures: list[str] = []
         self.last_agent: Any = None
         self.last_model: Any = None
+        self.last_extra: dict[str, Any] = {}
         self.last_provider: Any = None
         self.raise_on_get = raise_on_get
         # `closing` mirrors SessionManager._closing so begin_turn refuses the
@@ -382,9 +383,13 @@ class FakeSessions:
         model: Any = None,
         wait_if_busy: bool = True,
         start_priority=None,
+        **extra: Any,
     ) -> Any:
         self.last_agent = agent
         self.last_model = model
+        #: The rest of what the pipeline asked for (a tool-less turn's ``cwd`` and
+        #: ``crew_agent``), recorded so a test can pin it.
+        self.last_extra = extra
         if self.raise_on_get:
             raise RuntimeError("cold-start failed")
         # The real boundary captures the store this allocation supersedes INSIDE
@@ -704,6 +709,7 @@ def _dispatcher(
     raise_on_get: bool = False,
     default_agent: str = "",
     dm_scope: str = "per-channel-peer",
+    guests: set[str] | None = None,
 ) -> tuple[DiscordDispatcher, FakeClient, FakeSessions]:
     sess = FakeSessions(raise_on_get=raise_on_get)
     cfg = _cfg(default_agent=default_agent, dm_scope=dm_scope)
@@ -716,6 +722,7 @@ def _dispatcher(
         allowed_thread_ids=allowed_threads,
         agent=None,
         conv_log=None,
+        guest_user_ids=guests,
     )
     cli = FakeClient()
     d.client = cli  # type: ignore[assignment]

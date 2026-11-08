@@ -177,6 +177,10 @@ def _doctor_discord(
         print(f"{render._INDENT}right-click your name → Copy User ID), then `kirocrew restart`")
         issues.append("discord: empty user allow-list denies every message")
 
+    guests = [str(g) for g in dc.guest_user_ids if str(g) not in users]
+    if guests:
+        print(f"  guests:      ✅ {len(guests)} listed (tool-less chat only, no commands)")
+
     # A server allow-list of either kind is what makes the privileged intent
     # mandatory, so the line that reports the allow-lists names that link: the
     # operator who just added a thread ID is the one who has to go and grant it.

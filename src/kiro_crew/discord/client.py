@@ -247,6 +247,10 @@ class DiscordClient:
         self._handler_tasks: set[asyncio.Task[None]] = set()
         # Bot's own user id (from READY) so we can drop our own messages.
         self.bot_user_id: str = ""
+        # Bot accounts whose messages are delivered instead of dropped: the listed
+        # guests (``discord.guest_user_ids``). Replaced wholesale by the transport,
+        # which owns the roster; empty means every bot message is dropped.
+        self.guest_bot_ids: frozenset[str] = frozenset()
         # Application id (from READY) — the path parameter for application
         # command registration. Empty until the first handshake completes.
         self.application_id: str = ""

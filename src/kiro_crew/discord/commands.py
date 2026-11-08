@@ -19,6 +19,7 @@ from typing import Any
 # same two so a description this module truncates and one the client truncates
 # cannot disagree.
 from kiro_crew.discord.client import _APP_COMMAND_DESC_LIMIT, _APP_COMMAND_NAME_RE
+from kiro_crew.discord.guests import guest_help_text
 from kiro_crew.messaging.conversation import ConversationState  # noqa: F401
 
 # ── Command constants (each accepts ! and / prefixes) ──
@@ -264,7 +265,7 @@ def build_help_text() -> str:
 _MIN_COMMAND_NAME_LEN = 2
 
 
-def unknown_command_usage(text: str) -> str:
+def unknown_command_usage(text: str, *, guest: bool = False) -> str:
     """The usage reply for a command-shaped ``!token`` that names no command.
 
     ``""`` means "not a mistyped command" and the message runs as a turn.
@@ -295,7 +296,8 @@ def unknown_command_usage(text: str) -> str:
     # message that was never a command, and it must tell them how to resend it.
     # Echoing the token back is safe because the shape check above admits only
     # ``[a-z0-9_-]``, so it carries no backtick, mention or credential syntax.
+    card = guest_help_text() if guest else build_help_text()
     return (
         f"❓ `{token}` isn't a command. To chat, send the message without the "
-        f"leading `!`.\n\n{build_help_text()}"
+        f"leading `!`.\n\n{card}"
     )

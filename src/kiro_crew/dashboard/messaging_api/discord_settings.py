@@ -2,7 +2,7 @@
 
 The bot token lives in config_dir/.env as DISCORD_BOT_TOKEN (0600), with
 config.json's discord.bot_token as a legacy fallback. Non-secret config
-(enabled, allowed_user_ids, allowed_thread_ids, soft_threshold_pct) lives
+(enabled, allowed_user_ids, guest_user_ids, allowed_thread_ids, soft_threshold_pct) lives
 in config.json under the "discord" key. GET returns a masked preview +
 presence boolean; raw token values are write-only (reset at the Developer
 Portal if ever needed).
@@ -105,6 +105,7 @@ async def api_discord_config_get(request: web.Request) -> web.Response:
             "bot_token_preview": _mask_secret(token),
             "enabled": bool(dc.enabled),
             "allowed_user_ids": [str(u) for u in dc.allowed_user_ids],
+            "guest_user_ids": [str(u) for u in dc.guest_user_ids],
             "allowed_thread_ids": [str(t) for t in dc.allowed_thread_ids],
             "allowed_channel_ids": [str(c) for c in dc.allowed_channel_ids],
             "auto_thread": bool(dc.auto_thread),
@@ -257,6 +258,23 @@ async def _discord_config_save_locked(request: web.Request) -> web.Response:
         if new_ids != [str(u) for u in coerce_config_field(dc_cfg, "allowed_user_ids", list, [])]:
             staged["allowed_user_ids"] = new_ids
             applied.append("allowed_user_ids")
+
+    if "guest_user_ids" in body:
+        raw_ids = body.get("guest_user_ids")
+        if not isinstance(raw_ids, list):
+            return _deny("guest_user_ids must be a list")
+        new_ids = []
+        for item in raw_ids:
+            s = str(item).strip()
+            if not s:
+                continue
+            if not s.isdigit():
+                return _deny(f"invalid Discord user ID: {s} (numeric IDs only)")
+            if s not in new_ids:
+                new_ids.append(s)
+        if new_ids != [str(u) for u in coerce_config_field(dc_cfg, "guest_user_ids", list, [])]:
+            staged["guest_user_ids"] = new_ids
+            applied.append("guest_user_ids")
 
     if "allowed_thread_ids" in body:
         raw_ids = body.get("allowed_thread_ids")

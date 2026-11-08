@@ -22,6 +22,7 @@ from kiro_crew.discord.client import DiscordClient
 from kiro_crew.discord.commands import application_command_payload
 from kiro_crew.discord.transport import DiscordTransport
 from kiro_crew.discord.transport_dispatch import _CHANNEL, DiscordDispatcher
+from kiro_crew.messaging.dispatch import warn_if_toolless_turns_unservable
 from kiro_crew.messaging.driver import APPROVAL_AUTO, APPROVAL_INTERACTIVE
 from kiro_crew.messaging.queue_drain import unregister_drain
 from kiro_crew.messaging.spawn_approval_delivery import (
@@ -59,6 +60,12 @@ def _client_close_hook(
         unregister_drain(_CHANNEL, drain_hook)
 
     return _on_close
+
+
+def _acp_backend(orch: "GatewayOrchestrator") -> str:
+    """The configured ACP backend, which decides whether a tool-less turn can run."""
+    backend = getattr(getattr(orch._cfg, "agent", None), "acp_backend", "")
+    return backend if isinstance(backend, str) else ""
 
 
 def _resolve_approval_mode(orch: "GatewayOrchestrator") -> str:
@@ -143,6 +150,7 @@ async def maybe_start_discord(orch: "GatewayOrchestrator") -> "DiscordClient | N
         assert orch.sessions is not None and orch.ctx_builder is not None
 
         allowed_ids: set[str] = set(getattr(orch, "_discord_allowed_user_ids", []) or [])
+        guest_ids: set[str] = set(getattr(orch, "_discord_guest_user_ids", []) or [])
         allowed_threads: set[str] = set(getattr(orch, "_discord_allowed_thread_ids", []) or [])
         allowed_channels: set[str] = set(getattr(orch, "_discord_allowed_channel_ids", []) or [])
         auto_thread = bool(getattr(orch, "_discord_auto_thread", True))
@@ -163,6 +171,13 @@ async def maybe_start_discord(orch: "GatewayOrchestrator") -> "DiscordClient | N
             agent=None,
             conv_log=getattr(orch, "conv_log", None),
             approval_mode=_resolve_approval_mode(orch),
+            guest_user_ids=guest_ids,
+        )
+        warn_if_toolless_turns_unservable(
+            "discord",
+            admits_non_operators=bool(guest_ids - allowed_ids),
+            backend=_acp_backend(orch),
+            admission=f"guest_user_ids={len(guest_ids - allowed_ids)}",
         )
         client = DiscordClient(
             token=bot_token,
@@ -176,6 +191,7 @@ async def maybe_start_discord(orch: "GatewayOrchestrator") -> "DiscordClient | N
         transport = DiscordTransport(
             client,
             allowed_user_ids=allowed_ids,
+            guest_user_ids=guest_ids,
             allowed_thread_ids=allowed_threads,
             allowed_channel_ids=allowed_channels,
             auto_thread=auto_thread,

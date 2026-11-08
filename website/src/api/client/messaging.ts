@@ -159,6 +159,8 @@ export interface DiscordConfigData {
   bot_token_preview: string
   enabled: boolean
   allowed_user_ids: string[]
+  /** Guests: answered tool-less, no commands, no approvals. Optional for older gateways. */
+  guest_user_ids?: string[]
   allowed_thread_ids: string[]
   /** Shared server channels an approved user may start a turn in. */
   allowed_channel_ids: string[]
@@ -203,6 +205,7 @@ export interface DiscordConfigSave {
   bot_token_clear: boolean
   enabled: boolean
   allowed_user_ids: string[]
+  guest_user_ids?: string[]
   allowed_thread_ids: string[]
   allowed_channel_ids: string[]
   auto_thread: boolean

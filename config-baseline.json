@@ -8237,6 +8237,7 @@
         "enabled": false,
         "bot_token": "",
         "allowed_user_ids": [],
+        "guest_user_ids": [],
         "allowed_thread_ids": [],
         "allowed_channel_ids": [],
         "auto_thread": true,
@@ -8296,6 +8297,36 @@
     },
     {
       "path": "discord.allowed_user_ids.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "*",
+      "help": "",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": null
+    },
+    {
+      "path": "discord.guest_user_ids",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "discord"
+      ],
+      "label": "Guest User IDs",
+      "help": "Discord user IDs (snowflakes) of people or bots the bot answers as guests. A guest can chat in DMs and in approved threads and channels, but every turn runs tool-less in a session of its own, and a guest cannot change the agent, model or session or answer an approval. A listed bot is answered only when it mentions the bot or replies to it. A user in both lists is an operator. Empty = no guests.",
+      "hasChildren": true,
+      "enumValues": null,
+      "defaultValue": []
+    },
+    {
+      "path": "discord.guest_user_ids.*",
       "kind": "core",
       "type": "string",
       "required": false,

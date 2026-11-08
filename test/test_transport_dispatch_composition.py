@@ -313,7 +313,8 @@ BASE_MEMBERS: dict[str, tuple[str, bool, str]] = {
             "(self, *, sessions: \"'SessionManager'\", ctx_builder: \"'ContextBuilder'\", cfg: "
             "\"'KiroCrewConfig'\", allowed_user_ids: 'set[str]', allowed_thread_ids: 'set[str] "
             "| None' = None, agent: 'str | None' = None, conv_log: \"'ConversationLog | "
-            "None'\" = None, approval_mode: 'str' = 'interactive') -> 'None'"
+            "None'\" = None, approval_mode: 'str' = 'interactive', guest_user_ids: "
+            "'set[str] | None' = None) -> 'None'"
         ),
     ),
     "_apply_model": (
@@ -398,7 +399,7 @@ BASE_MEMBERS: dict[str, tuple[str, bool, str]] = {
     "_interaction_actionable": (
         "function",
         True,
-        ("(self, user_id: 'str', thread_id: 'str') -> 'bool'"),
+        ("(self, user_id: 'str', thread_id: 'str', *, allow_guest: 'bool' = False) " "-> 'bool'"),
     ),
     "_interaction_reply": (
         "function",

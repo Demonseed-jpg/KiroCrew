@@ -849,6 +849,7 @@ class GatewayOrchestrator:
     _discord_bot_token: str
     _discord_enabled: bool
     _discord_allowed_user_ids: list[str]
+    _discord_guest_user_ids: list[str]
     _discord_allowed_thread_ids: list[str]
     _discord_allowed_channel_ids: list[str]
     _discord_auto_thread: bool

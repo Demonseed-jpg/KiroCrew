@@ -314,11 +314,14 @@ class DiscordDispatcher:
         agent: str | None = None,
         conv_log: "ConversationLog | None" = None,
         approval_mode: str = APPROVAL_INTERACTIVE,
+        guest_user_ids: set[str] | None = None,
     ) -> None:
         self.sessions = sessions
         self.ctx_builder = ctx_builder
         self.cfg = cfg
         self._allowed = set(allowed_user_ids or ())
+        # The guest list as configured; ``guests.is_guest`` drops every operator.
+        self._guest_listed = {str(u) for u in (guest_user_ids or ())}
         self._allowed_threads = set(allowed_thread_ids or ())
         # The subset of ``_allowed_threads`` that came from config.json, so a
         # reload can tell a thread an operator removed from a thread this process
@@ -438,6 +441,16 @@ class DiscordDispatcher:
             # The ``!sessions`` owner is the third copy of the roster and must
             # move with it: an added second identity revokes the surface now.
             self._session_resume.reconfigure(self._allowed)
+        if hasattr(section, "guest_user_ids"):
+            guests = _coerce_snowflakes(section.guest_user_ids)
+            if guests is None:
+                logger.warning(
+                    "discord: guest_user_ids is not a list in the reloaded config; the "
+                    "dispatcher keeps its previous guest list (%d id(s))",
+                    len(self._guest_listed),
+                )
+            else:
+                self._guest_listed = set(guests)
         threads = _coerce_snowflakes(getattr(section, "allowed_thread_ids", None))
         if threads is None:
             logger.warning(
@@ -503,6 +516,16 @@ class DiscordDispatcher:
         :meth:`on_interaction`, never dispatched here.
         """
         assert self.client is not None, "DiscordDispatcher.client must be set"
+        # Imported here: this facade's bound names are pinned (composition test).
+        from kiro_crew.discord.guests import (
+            GUEST_REFUSAL,
+            guest_help_text,
+            guest_scope_id,
+            is_guest,
+            is_operator_only,
+        )
+        from kiro_crew.messaging.dispatch import Audience
+
         monitor_result = (
             MonitorDispatchResult.UNAVAILABLE if monitor_completion is not None else None
         )
@@ -526,12 +549,20 @@ class DiscordDispatcher:
             return monitor_result
         user_id = msg.user_id
         thread_id = msg.thread_id or ""
-        scope_id = self._scope_id(user_id, thread_id)
+        # A guest's turns are tool-less and live in session buckets of their own
+        # (``_session_key``); everything below that touches a session, a binding or
+        # an approval branches on this one fact, read from the roster once.
+        guest = is_guest(self, user_id)
+        scope_id = (
+            guest_scope_id(user_id, thread_id) if guest else self._scope_id(user_id, thread_id)
+        )
         text = msg.text
         native_session_key = self._session_key(user_id, thread_id)
 
         async def _resolve_refused_route() -> RoutingDecision:
-            if not (interpret_commands or bool(origin_tag)):
+            # A guest never routes into a resumed (dashboard) session: it is bound
+            # to the operator's conversation, not to the guest's bucket.
+            if guest or not (interpret_commands or bool(origin_tag)):
                 return RoutingDecision()
             async with self._routing_turn(channel_id):
                 return await self._session_resume.route(channel_id)
@@ -580,11 +611,20 @@ class DiscordDispatcher:
 
         # ── Command intercept (no LLM session needed) ──
         cmd = parse_command(text) if interpret_as_command and override_mode is None else None
+        if guest and cmd is not None:
+            # Decided before any handler runs: a guest cannot reach the code that
+            # changes the agent, model or session, nor see the operator's status.
+            if is_operator_only(cmd):
+                await self.client.send_message(channel_id, GUEST_REFUSAL)
+                return monitor_result
+            if cmd == "help":
+                await self.client.send_message(channel_id, guest_help_text())
+                return monitor_result
         # `!compact` and `!stop` act on the resolved session, so after a binding was
         # destroyed they would compact or cancel the NATIVE DM session while the user
         # believes they drive the resumed one; deciding here makes that structural.
         route = RoutingDecision()
-        wants_routing = interpret_commands or bool(origin_tag)
+        wants_routing = (interpret_commands or bool(origin_tag)) and not guest
         if wants_routing and cmd not in _DETACH_EXEMPT_COMMANDS:
             async with self._routing_turn(channel_id) as queued:
                 route = await self._session_resume.route(channel_id)
@@ -707,7 +747,7 @@ class DiscordDispatcher:
                     "Those take a message: `!queue <msg>` or `!steer <msg>`.",
                 )
                 return monitor_result
-            usage = unknown_command_usage(text)
+            usage = unknown_command_usage(text, guest=guest)
             if usage:
                 await self.client.send_message(channel_id, usage)
                 return monitor_result
@@ -798,7 +838,7 @@ class DiscordDispatcher:
             return MonitorDispatchResult.UNAVAILABLE
         decider = (
             DiscordApprovalDecider(session_key=session_key)
-            if self.approval_mode == APPROVAL_INTERACTIVE
+            if self.approval_mode == APPROVAL_INTERACTIVE and not guest
             else None
         )
         # Bound once for the factory and the intake below: a closure does not keep
@@ -901,8 +941,12 @@ class DiscordDispatcher:
                     # dashboard is mirrored back here. A resumed session's own
                     # surface owns its output, and ``!link`` refuses there too, so
                     # the automatic path must not do what the explicit one declines.
+                    # A guest's session is never mirrored: unattended output about it
+                    # would reach a sender the operator has not vouched for.
                     origin=(
-                        None if resumed_key is not None else self._origin_mirror_link(channel_id)
+                        None
+                        if resumed_key is not None or guest
+                        else self._origin_mirror_link(channel_id)
                     ),
                     # ``model`` applies only when this turn COLD-STARTS the session:
                     # the fast path returns a reused session before it consults the
@@ -910,6 +954,9 @@ class DiscordDispatcher:
                     model=_pick_before or None,
                     # A resumed session runs its own persisted agent.
                     agent=None if resumed_key is not None else self._resolve_agent(scope_id),
+                    # The pipeline runs a GUEST turn tool-less on the guest agent,
+                    # minimal-context, interactive with no decider and no grant.
+                    audience=Audience.GUEST if guest else Audience.OWNER,
                 ),
                 text,
                 _renderer,
@@ -1357,7 +1404,16 @@ class DiscordDispatcher:
         )
 
     def _resolve_agent(self, scope_id: str | None = None) -> str:
-        """The agent *scope_id* runs: its ``!agent`` pick, else the configured one."""
+        """The agent *scope_id* runs: its ``!agent`` pick, else the configured one.
+
+        A guest scope always runs the tool-less guest agent: it has no pick and no
+        configured default to follow.
+        """
+        from kiro_crew.discord.guests import GUEST_SCOPE_PREFIX
+        from kiro_crew.messaging.dispatch import TOOLLESS_TURN_AGENT
+
+        if scope_id is not None and scope_id.startswith(GUEST_SCOPE_PREFIX):
+            return TOOLLESS_TURN_AGENT
         return self._agent_picks.resolve(scope_id, self._configured_agent(scope_id))
 
     @staticmethod
@@ -1365,6 +1421,19 @@ class DiscordDispatcher:
         return f"thread:{thread_id}" if thread_id else f"user:{user_id}"
 
     def _session_key(self, user_id: str, thread_id: str = "") -> str:
+        """The session this sender's turns run in.
+
+        A guest never shares a bucket with the operator, whatever ``dm_scope`` says
+        (:func:`~kiro_crew.discord.guests.guest_session_key`).
+        """
+        from kiro_crew.discord.guests import guest_scope_id, guest_session_key, is_guest
+
+        if is_guest(self, user_id):
+            return guest_session_key(
+                user_id,
+                thread_id,
+                gen=self._conv.current_gen(guest_scope_id(user_id, thread_id)),
+            )
         scope_id = self._scope_id(user_id, thread_id)
         gen = self._conv.current_gen(scope_id)
         return build_dm_session_key(
@@ -1386,6 +1455,12 @@ class DiscordDispatcher:
         return resumed or self._session_key(user_id, thread_id)
 
     def _seed_gen(self, scope_id: str) -> int:
+        from kiro_crew.discord.guests import GUEST_SCOPE_PREFIX, guest_seed_generation
+
+        if scope_id.startswith(GUEST_SCOPE_PREFIX):
+            # The guest bucket (see ``_session_key``): its own generation counter,
+            # seeded from the buckets on disk like the operator's.
+            return guest_seed_generation(self.sessions, scope_id)
         if scope_id.startswith("thread:"):
             thread_id = scope_id.removeprefix("thread:")
             bucket = build_dm_session_key(
@@ -1437,7 +1512,13 @@ class DiscordDispatcher:
         The hard-compaction backstop is the backend autocompactor
         (``session.autocompact_pct``).
         """
+        from kiro_crew.discord.guests import GUEST_SCOPE_PREFIX
+
         pct = self.sessions.check_context_usage(session_key, provider)
+        if scope_id.startswith(GUEST_SCOPE_PREFIX):
+            # Accounting above still runs (it is what triggers the backend
+            # autocompactor), but the nudge names commands a guest cannot use.
+            return
         soft_pct = self._soft_threshold()
         if recycle_backend(provider):
             # Crew restarts this backend's session at the threshold; warn once

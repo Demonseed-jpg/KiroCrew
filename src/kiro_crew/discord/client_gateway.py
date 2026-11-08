@@ -99,6 +99,10 @@ class DiscordInbound:
     message_id: str = ""
     guild_id: str = ""  # empty string == DM channel
     is_bot: bool = False
+    #: The message @-mentions this bot (a user mention, not ``@everyone`` or a role).
+    mentions_bot: bool = False
+    #: The message is a reply to one of this bot's own messages.
+    replies_to_bot: bool = False
     attachments: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -396,14 +400,21 @@ def _on_dispatch(self: DiscordClient, event: str, d: dict) -> None:
             message_id=str(d.get("id", "")),
             guild_id=str(d.get("guild_id", "") or ""),
             is_bot=bool(author.get("bot", False)),
+            mentions_bot=_mentions_user(d.get("mentions"), self.bot_user_id),
+            replies_to_bot=_replies_to_user(d.get("referenced_message"), self.bot_user_id),
             attachments=[
                 attachment
                 for attachment in (d.get("attachments") or [])
                 if isinstance(attachment, dict)
             ],
         )
-        if inbound.is_bot or inbound.user_id == self.bot_user_id:
-            return  # never respond to bots (incl. ourselves) — loop guard
+        if inbound.user_id == self.bot_user_id:
+            return  # never respond to ourselves — loop guard
+        if inbound.is_bot and inbound.user_id not in self.guest_bot_ids:
+            # A bot is answered only when an operator listed it as a guest
+            # (``discord.guest_user_ids``); the transport then still requires it to
+            # address this bot and rate-limits the turns it starts.
+            return
         task = asyncio.create_task(self._invoke_message(inbound))
         self._handler_tasks.add(task)
         task.add_done_callback(self._handler_tasks.discard)
@@ -433,6 +444,21 @@ def _on_dispatch(self: DiscordClient, event: str, d: dict) -> None:
         task = asyncio.create_task(self._invoke_interaction(interaction))
         self._handler_tasks.add(task)
         task.add_done_callback(self._handler_tasks.discard)
+
+
+def _mentions_user(mentions: Any, user_id: str) -> bool:
+    """Whether a MESSAGE_CREATE ``mentions`` array names *user_id*."""
+    if not user_id or not isinstance(mentions, list):
+        return False
+    return any(isinstance(m, dict) and str(m.get("id", "")) == user_id for m in mentions)
+
+
+def _replies_to_user(referenced: Any, user_id: str) -> bool:
+    """Whether a MESSAGE_CREATE ``referenced_message`` was written by *user_id*."""
+    if not user_id or not isinstance(referenced, dict):
+        return False
+    author = referenced.get("author")
+    return isinstance(author, dict) and str(author.get("id", "")) == user_id
 
 
 async def _invoke_message(self: DiscordClient, inbound: DiscordInbound) -> None:

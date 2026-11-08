@@ -855,6 +855,7 @@ def _build_discord_config(discord_data: dict) -> DiscordConfig:
         # keep them as strings (JSON round-trip safe, matches the
         # transport's string comparison).
         allowed_user_ids=_coerce_str_ids(section.get("allowed_user_ids")),
+        guest_user_ids=_coerce_str_ids(section.get("guest_user_ids")),
         allowed_thread_ids=_coerce_str_ids(section.get("allowed_thread_ids")),
         allowed_channel_ids=_coerce_str_ids(section.get("allowed_channel_ids")),
         auto_thread=bool(section.get("auto_thread")),

@@ -617,6 +617,19 @@ class DiscordConfig:
             tags=["discord"],
         ),
     )
+    guest_user_ids: list[str] = field(
+        default_factory=list,
+        metadata=_meta(
+            "Guest User IDs",
+            "Discord user IDs (snowflakes) of people or bots the bot answers as "
+            "guests. A guest can chat in DMs and in approved threads and channels, "
+            "but every turn runs tool-less in a session of its own, and a guest "
+            "cannot change the agent, model or session or answer an approval. A "
+            "listed bot is answered only when it mentions the bot or replies to it. "
+            "A user in both lists is an operator. Empty = no guests.",
+            tags=["discord"],
+        ),
+    )
     allowed_thread_ids: list[str] = field(
         default_factory=list,
         metadata=_meta(

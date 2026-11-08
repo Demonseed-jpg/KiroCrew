@@ -11,7 +11,7 @@ Orchestrator fields read: ``_SLACK_APPLIER_PREFIXES``, ``_cfg``,
 Orchestrator fields written: ``_channel_handles``, ``_channel_transports_started``,
 ``_config_subs``, ``_discord_allowed_channel_ids``, ``_discord_allowed_thread_ids``,
 ``_discord_allowed_user_ids``, ``_discord_auto_thread``, ``_discord_bot_token``,
-``_discord_client``, ``_discord_enabled``, ``_feishu_allow_group``,
+``_discord_client``, ``_discord_enabled``, ``_discord_guest_user_ids``, ``_feishu_allow_group``,
 ``_feishu_allowed_group_ids``, ``_feishu_allowed_open_ids``, ``_feishu_app_id``,
 ``_feishu_app_secret``, ``_feishu_enabled``, ``_imessage_client``,
 ``_imessage_enabled``, ``_teams_allowed_emails``, ``_teams_app_id``,
@@ -166,6 +166,7 @@ def _hoist_discord(
     self._discord_bot_token = creds.get(CRED_DISCORD_BOT_TOKEN, "") or cfg.discord.bot_token
     self._discord_enabled = bool(cfg.discord.enabled and self._discord_bot_token)
     self._discord_allowed_user_ids = [str(u) for u in cfg.discord.allowed_user_ids]
+    self._discord_guest_user_ids = [str(u) for u in cfg.discord.guest_user_ids]
     self._discord_allowed_thread_ids = [str(t) for t in cfg.discord.allowed_thread_ids]
     self._discord_allowed_channel_ids = [str(c) for c in cfg.discord.allowed_channel_ids]
     self._discord_auto_thread = bool(cfg.discord.auto_thread)

@@ -11,8 +11,9 @@ behind NAT and firewalls with no webhook, public address, or inbound port.
 | **DMs** | Responds to messages from an allow-listed user. No `@mention` needed. |
 | **Approved server threads** | Responds when both the sender's user ID and the exact thread ID are allow-listed. Everyone who can view the thread can read replies and tool output. |
 | **Allowed server channels** | Opt-in. An allow-listed user's message in an allow-listed channel opens a fresh public thread and the turn runs there, never in the shared channel itself. Off unless you add channel IDs. |
+| **Guests** | A person or bot listed in `guest_user_ids` is answered in a DM, in an approved thread and in an allowed channel, with a restricted assistant: no tools, no operator context and no commands. See [Guests](#guests). |
 | **Every other server channel** | Ignored, including a channel ID entered in the *thread* allow-list by mistake: Kiro Crew verifies the Discord channel type before running a turn. |
-| **Unknown users, threads or channels** | Denied. Security-relevant attempts are audited; unrelated guild chatter is discarded silently. Empty user allow-list denies everything; empty thread and channel allow-lists mean DMs only. |
+| **Unknown users, threads or channels** | Denied. A bot is ignored unless it is a listed guest. Security-relevant attempts are audited; unrelated guild chatter is discarded silently. Empty user allow-list denies everything; empty thread and channel allow-lists mean DMs only. |
 
 Discord represents threads as specialized guild channels with their own channel
 IDs. Forum posts are threads too. Group DMs are different and are not supported
@@ -103,6 +104,7 @@ DISCORD_BOT_TOKEN=<your bot token>
   "discord": {
     "enabled": true,
     "allowed_user_ids": ["123456789012345678"],
+    "guest_user_ids": [],
     "allowed_thread_ids": ["234567890123456789"],
     "allowed_channel_ids": ["345678901234567890"],
     "auto_thread": true
@@ -110,7 +112,8 @@ DISCORD_BOT_TOKEN=<your bot token>
 }
 ```
 
-Omit `allowed_thread_ids` and `allowed_channel_ids`, or leave them empty, for
+`guest_user_ids` is optional and empty by default; see [Guests](#guests) before
+filling it in. Omit `allowed_thread_ids` and `allowed_channel_ids`, or leave them empty, for
 DMs only. `allowed_channel_ids` lets an approved user start a turn from a shared
 server channel; the turn itself always runs in a public thread opened from that
 message, so `auto_thread` (default `true`) must stay on for those channels to
@@ -181,10 +184,63 @@ Portal or clear the thread allow-list and restart in DM-only mode.
   dashboard itself) is where they belong -- an allow-listed chat participant is
   authorized to drive the agent, which is a different claim.
 - **Conversation scope.** Approved participants in one thread share that
-  thread's agent session and context. DMs remain isolated per user.
+  thread's agent session and context. DMs remain isolated per user. Guests
+  never share it: see [Guests](#guests).
 - **Token handling.** The token lives in `~/.kiro/crew/.env` (mode 0600), is
   masked in Settings, excluded from agent subprocess environments, and can be
   changed only from the machine running the gateway.
+
+## Guests
+
+`discord.allowed_user_ids` names the operators: people who may drive the agent
+with its tools, memory and approvals. `discord.guest_user_ids` names people and
+bots the bot will talk to without trusting them. It is a list of Discord user
+IDs, empty by default (no guests, and every other behavior on this page is
+unchanged). Edit it in `config.json` or through `PUT /api/discord/config`; a
+change applies to the next message without a restart.
+
+A guest can chat wherever an operator can: in a DM with the bot, in an approved
+thread, and in an allowed channel (where the message opens a thread, as it does
+for an operator). A guest's replies come from a restricted assistant:
+
+| | Operator | Guest |
+|---|---|---|
+| Tools, files, MCP servers, memory, lessons | Yes | **None.** The turn runs on the tool-less `kirocrew-guest` agent in an isolated directory with minimal context. |
+| Session | The operator's DM or thread session | **A separate session.** A DM is the guest's alone. In a thread, guests share one session of their own, apart from the operator's session in that thread. `messaging.dm_scope = "unified"` never applies to a guest. |
+| Approvals and buttons | Approve or deny tool prompts, pick models and sessions | **Cannot press any of them.** The only button a guest can press is a choice under a reply the guest's own session wrote. A press on an operator's approval is refused and resolves nothing. |
+| Commands (`!` or `/`) | All of them | **`!help` only**, which shows a card without the operator commands. `!agent`, `!model`, `!new`, `!compact`, `!sessions`, `!link`, `!unlink`, `!stop`, `!status` and any command added later are refused. |
+| Dashboard mirroring and proactive messages | Yes | No. A guest's session is never linked to a dashboard tab, and the agent cannot message a guest first. |
+| Resumed dashboard sessions | `!sessions` | A guest is never routed into a resumed session, even in a conversation an operator linked. |
+
+`!queue <msg>` and `!steer <msg>` work for a guest only on the guest's own
+running reply. `!stop` is operator-only and acts on the operator's own session:
+in a thread where a guest's reply is running, an operator cannot stop it with
+`!stop`, so approved threads should hold guests you trust not to run up cost.
+
+A user listed in both `allowed_user_ids` and `guest_user_ids` is an operator, and
+guests never count toward the single-operator rule `!sessions` uses.
+
+Guest turns need a backend that can run a tool-less turn (the default `kiro`
+backend can). On any other backend, every guest turn is refused with a one-line
+note, and the gateway logs a warning at startup when `guest_user_ids` is set.
+
+### Bots as guests
+
+A bot is dropped by default, and so are this bot's own messages. A bot whose ID is
+in `guest_user_ids` is admitted as a guest, with two limits that keep two bots from
+answering each other forever:
+
+- **It must address this bot.** A listed bot's message starts a turn only when it
+  @-mentions this bot or replies to one of this bot's messages, in a server
+  channel or thread (bots cannot DM one another). Anything else it writes is
+  ignored.
+- **Bot-started turns are rate-limited per conversation.** At most 15 seconds
+  apart, and at most 5 in a row. A message from a person in that conversation
+  starts the count over, and so does 15 minutes of quiet. A refused message is
+  audited as `denied_bot_turn_limit` and gets no reply.
+
+Mention and reply detection read the same Message Content intent the server
+allow-lists already require, so there is no new intent to grant.
 
 ## Usage
 
@@ -197,6 +253,9 @@ which autocompletes as you type and answers **only to you**, so nobody else in a
 shared thread sees the reply. The `!` form is plain message text and always
 works, including before the `applications.commands` scope is installed.
 
+Every command below except `!help` is for operators; a guest who sends one is told
+so and the text never reaches the model.
+
 | Command | Effect |
 |---------|--------|
 | `!new` / `!start` | Start a fresh conversation (shared for the current thread) |
@@ -207,7 +266,7 @@ works, including before the `applications.commands` scope is installed.
 | `!sessions` / `!session` | In a DM, pick a recent dashboard or same-DM session and continue it here (owner only) |
 | `!link` / `!unlink` | Resume or stop mirroring dashboard replies here (on by default) |
 | `!stop` / `!cancel` | Stop the current reply and clear its queue |
-| `!help` | Show commands |
+| `!help` | Show commands (guests see a shorter card, and this is the only command a guest can run) |
 
 `!queue <msg>` and `!steer <msg>` control a reply that is already running. They
 are message prefixes rather than commands, so they are deliberately absent from
