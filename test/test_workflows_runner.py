@@ -143,6 +143,67 @@ async def test_wall_clock_timeout_kills_runaway() -> None:
     assert res.events[-1].data["where"] == "ceiling"
 
 
+async def test_ceiling_names_the_silent_agent_in_flight() -> None:
+    """A run ended at the ceiling while an agent call was still running names
+    that call in the error TEXT (keeping the ``run exceeded`` prefix) and in
+    ``in_flight`` (agent_id + label + started_s_ago), and says how long the run
+    had been silent via ``last_event_s_ago``. The ceiling still keeps
+    ``where="ceiling"``."""
+    script = (
+        'META = {"name": "silent"}\n'
+        "async def workflow(ctx):\n"
+        "    await ctx.agent('compose two slides', label='compose')\n"
+        "    return 'never'\n"
+    )
+    never = asyncio.Event()
+
+    async def _hang_agent(prompt: str, opts: dict):
+        await never.wait()  # a silent agent: starts, then sends nothing
+        return "done"
+
+    res = await _runner(  # flake-ok: a tiny real ceiling is the boundary under test
+        agent_fn=_hang_agent, timeout_secs=0.05
+    ).run(script, run_id="wf_silent", now=NOW)
+    assert res.ok is False
+    failed = res.events[-1]
+    assert failed.type == "run_failed"
+    assert failed.data["where"] == "ceiling"
+    # The TEXT keeps the limit and names the stalled agent + the silence.
+    assert failed.data["error"].startswith("run exceeded 0.05s; ")
+    assert 'agent a0 "compose" still running' in failed.data["error"]
+    assert "no event for" in failed.data["error"]
+    in_flight = failed.data["in_flight"]
+    assert [c["label"] for c in in_flight] == ["compose"]
+    assert in_flight[0]["agent_id"] == "a0"
+    assert isinstance(in_flight[0]["started_s_ago"], (int, float))
+    assert isinstance(failed.data["last_event_s_ago"], (int, float))
+
+
+async def test_ceiling_in_flight_empty_when_no_agent_in_flight() -> None:
+    """A run that hits the ceiling with no agent call in flight (here a hung
+    author step, before any ctx.agent) carries an empty ``in_flight`` list and
+    an error text that says ``no agent call in flight`` -- telling a run stuck in
+    its own code apart from a silent agent -- and still reports
+    ``last_event_s_ago``."""
+
+    async def _hung_author(intent: str, *, on_progress=None):
+        await asyncio.Event().wait()
+
+    res = await _run_within(
+        _runner(  # flake-ok: a tiny real ceiling is the boundary under test
+            agent_fn=_echo_agent, timeout_secs=0.05
+        ).run("", run_id="wf_empty", now=NOW, intent="x", author_fn=_hung_author)
+    )
+    assert res is not None
+    assert res.ok is False
+    failed = res.events[-1]
+    assert failed.data["where"] == "ceiling"
+    assert failed.data["error"].startswith("run exceeded 0.05s; ")
+    assert "no agent call in flight, no event for" in failed.data["error"]
+    assert failed.data["in_flight"] == []
+    assert isinstance(failed.data["last_event_s_ago"], (int, float))
+
+
 async def test_timeout_never_leaks_cancellederror() -> None:
     """B5 regression: the wall-clock guard MUST convert a timeout into a clean
     ``run_failed(where="ceiling")`` and NEVER propagate ``asyncio.CancelledError``
