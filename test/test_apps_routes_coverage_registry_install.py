@@ -25,6 +25,7 @@ from apps_routes_coverage_helpers import (
 )
 
 import kiro_crew.apps.routes as routes_mod
+from kiro_crew.apps.bridges import RegistrationResult
 from kiro_crew.apps.manager import disable_app, enable_app
 from kiro_crew.apps.routes import _client_install_manifest
 
@@ -199,9 +200,9 @@ class TestRegistryInstall:
             calls.append("replace")
             return {"ok": ok, "name": name, "error": "" if ok else "copy failed"}
 
-        def _register(name: str) -> SimpleNamespace:
+        def _register(name: str) -> RegistrationResult:
             calls.append("register")
-            return SimpleNamespace(to_dict=dict)
+            return RegistrationResult()
 
         monkeypatch.setattr(routes_mod, "install_from_registry", _reinstall)
         monkeypatch.setattr(routes_mod, "register_app", _register)

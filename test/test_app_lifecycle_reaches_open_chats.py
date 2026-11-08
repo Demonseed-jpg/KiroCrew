@@ -1,10 +1,10 @@
 """An app's update, disable or uninstall reaches the chats already open.
 
 Each route ends with the step an MCP page write ends with
-(``template_server_request._reach_sessions``) once the agent spec holds the change,
-when the app was enabled and declares MCP servers or an update registered one, and
-leaves open chats alone otherwise (app-kit-platform §1). The step itself is pinned in
-``test_template_server_request_parts.py``.
+(``dashboard.handlers.mcp.apply_mcp_change_to_open_chats``) once the agent spec holds
+the change, when the app was enabled and declares MCP servers or an update registered
+one, and leaves open chats alone otherwise (app-kit-platform §1). The step itself is
+pinned in ``test_template_server_request_parts.py``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from apps_routes_coverage_helpers import APP, _install, _make_app, _setup_env
 
 import kiro_crew.apps.routes as routes_mod
-import kiro_crew.dashboard.handlers.template_server_request as tsr
+import kiro_crew.dashboard.handlers.mcp as mcp
 from kiro_crew.apps.manager import APP_MANIFEST_FILENAME, AppResult, app_dir, enable_app
 
 #: A backend-less app's HTTP server: registered as declared, with no backend to start.
@@ -67,7 +67,7 @@ async def test_lifecycle_route_reaches_open_chats_when_an_enabled_app_has_mcp_se
         await kwargs["before_replace"]()
         return {"ok": True, "name": name}
 
-    monkeypatch.setattr(tsr, "_reach_sessions", _reach)
+    monkeypatch.setattr(mcp, "apply_mcp_change_to_open_chats", _reach)
     monkeypatch.setattr(routes_mod, "stop_app_backend", lambda n: None)
     monkeypatch.setattr(routes_mod, "start_app_backend", lambda n: None)
     monkeypatch.setattr(routes_mod, "update_app", _update)

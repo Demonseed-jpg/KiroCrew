@@ -21,6 +21,7 @@ from gateway_appkit_endpoints_helpers import (  # noqa: F401 -- the fixture is r
     app_env_fixture,
 )
 
+from kiro_crew.apps.bridges import RegistrationResult
 from kiro_crew.apps.manager import APP_MANIFEST_FILENAME
 from kiro_crew.apps.routes import register_app_routes
 
@@ -343,7 +344,7 @@ class TestRegistryInstallStream:
         # Stub register_app to avoid touching real bridges
         monkeypatch.setattr(
             "kiro_crew.apps.routes.register_app",
-            lambda name: type("R", (), {"to_dict": lambda self: {"ok": True}})(),
+            lambda name: RegistrationResult(),
         )
 
         async with self._make_client() as client:
@@ -558,7 +559,7 @@ class TestRegistryInstallStreamSecurity:
         )
         monkeypatch.setattr(
             "kiro_crew.apps.routes.register_app",
-            lambda name: type("R", (), {"to_dict": lambda self: {"ok": True}})(),
+            lambda name: RegistrationResult(),
         )
 
         async with self._make_client() as client:
@@ -603,7 +604,7 @@ class TestRegistryInstallStreamSecurity:
         )
         monkeypatch.setattr(
             "kiro_crew.apps.routes.register_app",
-            lambda name: type("R", (), {"to_dict": lambda self: {"ok": True}})(),
+            lambda name: RegistrationResult(),
         )
 
         async with self._make_client() as client:

@@ -540,7 +540,6 @@ test/test_message_provenance.py
 test/test_message_queue.py
 test/test_messaging_link.py
 test/test_mochi_activity.py
-test/test_mochi_agent_policy.py
 test/test_mochi_mcp_server.py
 test/test_mochi_routes.py
 test/test_model_registry_parity.py

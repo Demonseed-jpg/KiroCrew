@@ -141,6 +141,12 @@ reaches a **new** chat. An open chat needs more:
   `ACP_BACKENDS_MCP_WIRE_REINJECT`, `ACP_BACKENDS_MCP_RELAUNCH_RELOAD` in
   `src/kiro_crew/agent_sdk/backends_mcp.py`). A remote OAuth server also needs
   a drained warm pool ([connecting-remote-oauth-mcp-server](../guides/connecting-remote-oauth-mcp-server.md)).
+- **App enable and install.** When registering an app writes an MCP server, the
+  route takes the same step as an MCP page write
+  (`apply_mcp_change_to_open_chats` in
+  `src/kiro_crew/dashboard/handlers/mcp_agent_sync.py`, called from
+  `_reach_open_chats` in `src/kiro_crew/apps/routes_lifecycle.py`;
+  [app-kit-platform §7.4](../system-specs/modules/app-kit-platform.md#74-an-enable-or-install-brings-the-apps-mcp-servers-to-the-chats-already-open)).
 - **A mate's additions.** The gateway reloads that mate's running worker with
   the conversation kept, once it is idle
   (`src/kiro_crew/dashboard/crewmate_worker_reload.py`).

@@ -45,6 +45,7 @@ from kiro_crew.config.loader import (
     publish_materialized_agents,
     schedule_materialized_agents_refresh,
 )
+from kiro_crew.env import emit_env, expand_spec_args
 from kiro_crew.mcp_utils import without_mcp_refs
 from kiro_crew.platform.governance import may_skip_gate_now, strip_ungoverned_auto_approve
 from kiro_crew.sel import sel
@@ -96,6 +97,55 @@ def _global_mcp_specs() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — malformed global file is not our error
         logger.warning("MCP policy merge: cannot read global mcp.json: %s", exc)
         return {}
+
+
+def _host_mcp_specs() -> tuple[dict[str, Any], frozenset[str]]:
+    """The launch specs a grant may resolve, and the names the Crew store mutes.
+
+    The same sources the default agent's spec merges, in its precedence: the
+    edition's servers, the kiro-global file and each provider global, each filling
+    only the names the ones before it left missing, with the Crew store
+    ``<data home>/mcp.json`` laid over all of them. Host-managed names are left to
+    :func:`_managed_mcp_spec`.
+
+    A store entry stays muted until the user turns it on in MCP Management, and
+    that switch is the consent step a grant must not stand in for, so the names
+    whose store entry is muted come back separately. Best-effort per source: a
+    source that cannot be read contributes no servers, so a grant it would have
+    resolved is skipped rather than failing the app agent's materialization.
+    """
+    from kiro_crew import agent as agent_mod
+    from kiro_crew import user_json
+    from kiro_crew.mcp_cleanup import mcp_entry_is_muted
+
+    try:
+        edition = dict(agent_mod._extra_mcp_servers())
+    except Exception as exc:  # noqa: BLE001 - an uncomposable edition mounts none of its servers
+        logger.warning("MCP policy merge: cannot read the edition's MCP servers: %s", exc)
+        edition = {}
+    try:
+        scope_globals = list(agent_mod._extra_mcp_scope_globals())
+    except Exception as exc:  # noqa: BLE001 - same, for the provider globals
+        logger.warning("MCP policy merge: cannot read the provider-global MCP files: %s", exc)
+        scope_globals = []
+
+    specs = {name: dict(spec) for name, spec in edition.items() if isinstance(spec, dict)}
+    for source in (_global_mcp_specs(), *map(user_json.load_mcp_servers, scope_globals)):
+        for name, spec in source.items():
+            if isinstance(spec, dict):
+                specs.setdefault(name, dict(spec))
+    store_muted: set[str] = set()
+    for name, spec in user_json.load_mcp_servers(agent_mod._user_dir() / "mcp.json").items():
+        if not isinstance(spec, dict):
+            continue
+        specs[name] = {**specs.get(name, {}), **spec}
+        if mcp_entry_is_muted(spec):
+            store_muted.add(name)
+    managed = set(agent_mod._MANAGED_MCP_SERVERS)
+    return (
+        {name: spec for name, spec in specs.items() if name not in managed},
+        frozenset(store_muted - managed),
+    )
 
 
 def _is_within(candidate: Path, root: Path) -> bool:
@@ -283,23 +333,39 @@ def _apply_agent_mcp_policy(
     servers = dict(agent_data.get("mcpServers") or {})
     tools = list(agent_data.get("tools") or [])
     allowed = filtered_allowed
-    # Needed by BOTH branches: a policy entry names a server, it does not carry
-    # the launch spec, so the real command/args/env come from the ambient config.
-    ambient = _global_mcp_specs() if (granted or neutralized) else {}
+    # A policy entry names a server, it does not carry the launch spec, so the
+    # real command/args/env come from the host's MCP config. A grant resolves over
+    # every source the default agent's spec merges, so a server added on the MCP
+    # page or contributed by the edition can be granted; a neutralize entry only
+    # overrides what kiro-cli loads into every agent on its own, the global file.
+    host, store_muted = _host_mcp_specs() if granted else ({}, frozenset())
+    ambient = _global_mcp_specs() if neutralized else {}
+    # Imported here, as in _host_mcp_specs.
+    from kiro_crew.agent import entry_as_enabled
+    from kiro_crew.mcp_cleanup import mcp_entry_is_muted
 
     for name, spec in granted.items():
         if not isinstance(spec, dict):
             continue
         # A granted entry must be a COMPLETE server spec. The policy only carries
-        # POLICY (autoApprove/disabledTools); without the ambient command/args on
+        # POLICY (autoApprove/disabledTools); without the host's command/args on
         # top of it the entry is command-less, so the server never launches and
         # its tools are simply absent -- the agent reports "not available" with
         # nothing in any log. (Same defect the neutralize branch below had.)
-        base = servers.get(name) or ambient.get(name) or _managed_mcp_spec(name)
+        declared = servers.get(name)
+        if not declared and name in store_muted:
+            logger.warning(
+                "Skipping MCP grant for %r on agent %r: the server is turned off in "
+                "MCP Management; turn it on there before granting it to an app",
+                name,
+                agent_name,
+            )
+            continue
+        base = declared or host.get(name) or _managed_mcp_spec(name)
         if not isinstance(base, dict) or not base.get("command"):
             logger.warning(
                 "Skipping MCP grant for %r on agent %r: no launch spec found in "
-                "the agent config, the global MCP config, or the host's managed "
+                "the agent config, the host's MCP config, or the host's managed "
                 "servers",
                 name,
                 agent_name,
@@ -307,7 +373,23 @@ def _apply_agent_mcp_policy(
             continue
         merged = {**base, **spec}
         merged.pop("neutralized", None)
-        merged.pop("disabled", None)  # a grant un-disables a denied server
+        # kiro-cli never expands ``${HOME}`` in ``command`` or ``args``; the default
+        # agent's rebuild does, so a granted copy of the same server gets the same
+        # launch line.
+        if isinstance(merged.get("command"), str):
+            merged["command"] = expand_spec_args([merged["command"]], server=name)[0]
+        if "args" in merged:
+            merged["args"] = expand_spec_args(merged["args"], server=name)
+        # A declared env.PATH replaces the child's PATH; ``emit_env`` writes the full
+        # effective one, with home/login names expanded, as the rebuild does.
+        if isinstance(merged.get("env"), dict):
+            env = merged["env"]
+            values = expand_spec_args(list(env.values()), server=name)
+            merged["env"] = emit_env(dict(zip(env, values)))
+        # A grant un-disables a denied server, except one whose env names a vault
+        # secret nothing here resolves: that comes back muted, as on the default
+        # agent, rather than starting with the literal reference.
+        merged = entry_as_enabled(name, merged)
         # `mountOnly` (set by a policy for a built-in grant) means: mount the
         # server so the tool is visible, but keep it OFF allowedTools no matter
         # what the ceiling says, so every call routes through the approval gate
@@ -318,6 +400,8 @@ def _apply_agent_mcp_policy(
         # the managed specs), so the whole map is filtered once below rather than
         # here — see the pass at the end of this function.
         servers[name] = merged
+        if mcp_entry_is_muted(merged):
+            continue  # withheld: declared muted, never referenced or auto-approved
         ref = f"@{name}"
         if ref not in tools:
             tools.append(ref)

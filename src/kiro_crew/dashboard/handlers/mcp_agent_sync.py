@@ -1,7 +1,8 @@
 """Copying MCP servers into the Kiro Crew agent spec.
 
 ``_sync_mcp_to_agent`` and its batch form, the refusal when the agent home is not ours to
-write, and whether live sessions pick a change up by hot reload.
+write, whether live sessions pick a change up by hot reload, and bringing a change to the
+open chats (``apply_mcp_change_to_open_chats``).
 
 Part of the ``kiro_crew.dashboard.handlers.mcp`` family: callers and tests reach every
 name here as ``kiro_crew.dashboard.handlers.mcp.<name>``, and a patch there reaches this
@@ -460,3 +461,20 @@ def _mcp_hot_reload_active(request: web.Request) -> bool:
     except Exception:
         logger.warning("MCP hot-reload gate failed; resetting sessions instead", exc_info=True)
         return False
+
+
+async def apply_mcp_change_to_open_chats(request: web.Request) -> int:
+    """Bring an MCP change already written to the agent spec to the chats already open.
+
+    The step an MCP page write ends with, for a writer outside the MCP page (an app's
+    registration): where every live process applies the change itself
+    (:func:`_mcp_hot_reload_active`, which also marks the providers that apply it at
+    their next turn) nothing is reset and the answer is 0; otherwise every session and
+    the warm pool are reset, and the answer is how many sessions were.
+    """
+    if _mcp_hot_reload_active(request):
+        return 0
+    # Call-time import: the handlers package loads this family before the sessions facade.
+    from kiro_crew.dashboard.handlers.sessions import _reset_all_sessions
+
+    return int(await _reset_all_sessions(request))

@@ -8,6 +8,7 @@ like an allow.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -252,6 +253,125 @@ class TestApplyAgentMcpPolicy:
         assert "ghost" not in (out.get("mcpServers") or {})
         assert "@ghost" not in out["tools"]
 
+    @staticmethod
+    def _host_sources(monkeypatch, tmp_path, *, store=None, kiro_global=None, edition=None):
+        """Point every host MCP source a grant resolves over at fixed contents.
+
+        The Crew store is ``<KIROCREW_HOME>/mcp.json``, the kiro-global file is the
+        bridge's own ``_global_mcp_specs`` seam, the edition servers are the seam
+        ``mcp_sources`` reads too, and no provider global is contributed.
+        """
+        from kiro_crew import agent as agent_mod
+        from kiro_crew.agent_materialization import mcp_sources
+        from kiro_crew.apps import bridges
+
+        monkeypatch.setenv("KIROCREW_HOME", str(tmp_path))
+        if store is not None:
+            (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": store}), encoding="utf-8")
+        monkeypatch.setattr(bridges, "_global_mcp_specs", lambda: dict(kiro_global or {}))
+        monkeypatch.setattr(agent_mod, "_extra_mcp_servers", lambda: dict(edition or {}))
+        monkeypatch.setattr(mcp_sources, "_extra_mcp_scope_globals", lambda: [])
+        monkeypatch.setattr(mcp_sources, "_gateway_routed_names", frozenset)
+
+    def _grant(self, name, **spec):
+        return _apply_agent_mcp_policy(
+            {"name": CHAT_AGENT, "tools": ["fs_read"], "allowedTools": ["fs_read"]},
+            CHAT_AGENT,
+            self._policy(servers={name: {"autoApprove": [], "disabledTools": [], **spec}}),
+        )
+
+    def test_grant_resolves_a_server_from_the_crew_store(self, monkeypatch, tmp_path):
+        # The MCP page and registry installs write the Crew store, which the
+        # default agent reads; a grant naming such a server must mount it too.
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            store={"local-chorus-mcp": {"command": "/abs/launcher", "args": []}},
+        )
+        out = self._grant("local-chorus-mcp")
+        assert out["mcpServers"]["local-chorus-mcp"]["command"] == "/abs/launcher"
+        assert "@local-chorus-mcp" in out["tools"]
+
+    def test_grant_resolves_an_edition_server(self, monkeypatch, tmp_path):
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            edition={"builder-mcp": {"command": "/abs/builder", "args": [], "autoApprove": ["*"]}},
+        )
+        out = self._grant("builder-mcp")
+        assert out["mcpServers"]["builder-mcp"]["command"] == "/abs/builder"
+        assert "@builder-mcp" in out["tools"]
+        # The edition's own autoApprove is the default agent's; the app agent
+        # carries the policy's.
+        assert out["mcpServers"]["builder-mcp"]["autoApprove"] == []
+
+    def test_grant_never_lifts_a_consent_pending_store_entry(self, monkeypatch, tmp_path):
+        # A store entry stays muted until the user turns it on in MCP Management,
+        # even when the kiro-global file declares the same server live.
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            store={"pending": {"command": "/abs/pending", "args": [], "disabled": True}},
+            kiro_global={"pending": {"command": "/abs/pending", "args": []}},
+        )
+        out = self._grant("pending")
+        assert "pending" not in (out.get("mcpServers") or {})
+        assert "@pending" not in out["tools"]
+        assert "@pending" not in out["allowedTools"]
+
+    def test_grant_keeps_an_unrouted_secret_reference_withheld(self, monkeypatch, tmp_path):
+        # The vault reference resolves only when the MCP gateway starts the
+        # server; nothing routes it here, so it must not start with the literal.
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            store={
+                "vaulted": {"command": "/abs/vaulted", "args": [], "env": {"TOKEN": "secret://t"}}
+            },
+        )
+        out = self._grant("vaulted")
+        assert out["mcpServers"]["vaulted"]["disabled"] is True
+        assert "@vaulted" not in out["tools"]
+        assert "@vaulted" not in out["allowedTools"]
+
+    def test_store_entry_overrides_the_kiro_global_command(self, monkeypatch, tmp_path):
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            store={"both": {"command": "/abs/store-cmd", "args": []}},
+            kiro_global={"both": {"command": "/abs/global-cmd", "args": ["--x"]}},
+        )
+        out = self._grant("both")
+        assert out["mcpServers"]["both"]["command"] == "/abs/store-cmd"
+        assert out["mcpServers"]["both"]["args"] == []
+        assert "@both" in out["tools"]
+
+    def test_grant_expands_home_in_the_launch_args(self, monkeypatch, tmp_path):
+        # kiro-cli never expands ``${HOME}`` in ``args``, so the default agent's
+        # rebuild does it, and a grant must too or the script is not found.
+        monkeypatch.setenv("HOME", "/home/someone")
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            store={"node-srv": {"command": "${HOME}/bin/node", "args": ["${HOME}/srv/index.js"]}},
+        )
+        out = self._grant("node-srv")
+        assert out["mcpServers"]["node-srv"]["command"] == "/home/someone/bin/node"
+        assert out["mcpServers"]["node-srv"]["args"] == ["/home/someone/srv/index.js"]
+
+    def test_grant_extends_a_declared_path(self, monkeypatch, tmp_path):
+        # A declared env.PATH replaces the child's PATH, so the rebuild emits the
+        # full effective one; a grant must too or ``/usr/bin/env python3`` is lost.
+        monkeypatch.setenv("PATH", "/usr/bin")
+        self._host_sources(
+            monkeypatch,
+            tmp_path,
+            store={"py-srv": {"command": "/usr/bin/env", "args": [], "env": {"PATH": "/opt/t"}}},
+        )
+        path = self._grant("py-srv")["mcpServers"]["py-srv"]["env"]["PATH"]
+        assert path.split(os.pathsep)[0] == "/opt/t"
+        assert "/usr/bin" in path.split(os.pathsep)
+
     def test_neutralize_declares_the_server_and_removes_its_tool_reference(self, monkeypatch):
         # The entry must carry the FULL spec (copied from the global mcp.json):
         # kiro-cli's strict agent loader rejects the whole file over a
@@ -478,9 +598,7 @@ class TestPolicyMaterializationFailsClosed:
         policy = ap.apply_policy(tmp_path, {"extraMcpServers": []})
         assert CHAT_AGENT in policy["agents"]
 
-    def test_the_policy_still_lands_on_disk_when_materialization_fails(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_policy_still_lands_on_disk_when_materialization_fails(self, tmp_path, monkeypatch):
         """The boot reconcile reads the file, so persisting it is the recovery."""
         from kiro_crew.apps import bridges
         from kiro_crew.apps.builtins.mochi import agent_policy as ap

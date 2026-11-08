@@ -1086,7 +1086,7 @@ the innermost one.
 chat mounts the spec's `<app>:<server>` entries when it starts; on a harness that
 does not watch the spec file, a chat already open keeps the set it started with. So
 these routes end with the step an MCP page write ends with,
-`dashboard/handlers/template_server_request.py::_reach_sessions`: where every live
+`dashboard/handlers/mcp_agent_sync.py::apply_mcp_change_to_open_chats`: where every live
 session applies an MCP change itself (`_mcp_hot_reload_active`), it marks the ones
 that apply it at their next turn and resets nothing; otherwise it resets every
 session and drains the warm pool, so the next message starts from the new spec. A
@@ -1192,6 +1192,31 @@ spec and preserves the original `tools` and `allowedTools` grants; requesting
 one tool never becomes a grant to the whole server. A server whose `spec_gate` is
 closed (`kirocrew-computer` while computer use is off) is not copied, as on the
 host agent.
+
+A policy grant (`agent_mcp_policy.json`, `servers`) names a server and carries no
+launch spec, so `_apply_agent_mcp_policy` copies the spec from the first of: the
+app agent's own `mcpServers`, the host's MCP config (`_host_mcp_specs`), and the
+host-managed servers. The host's MCP config is every source the default agent's
+spec merges, in the rebuild's precedence: the edition's servers
+(`_extra_mcp_servers`), the kiro-global `~/.kiro/settings/mcp.json` and each
+provider global, each filling only names still missing, with the Crew store
+`<data home>/mcp.json` laid over all of them. So a server added on the MCP page,
+installed from a registry or contributed by the edition can be granted to an app
+agent. Two rules keep a grant from reaching further than the default agent does:
+
+- **A store mute is never lifted.** A store entry muted with `disabled` (a
+  registry install or a custom add waiting for the user to turn it on in MCP
+  Management) skips a grant the app agent's own config does not declare, with a
+  warning, even when the kiro-global file declares the name live. A `disabled`
+  from any other source is lifted by the grant.
+- **An unrouted secret reference stays withheld.** The grant un-mutes through
+  `mcp_sources.entry_as_enabled`, so a server whose env holds a `secret://`
+  reference the MCP gateway does not resolve is declared muted, with no `@server`
+  ref and no auto-approve, instead of starting with the literal reference.
+
+A `neutralize` entry reads the kiro-global file only: it overrides what kiro-cli
+loads into an agent on its own. An app template's own `@server` ref is not
+resolved against the host's MCP config; only a user grant is.
 
 ## 2. Auto-approve is intersected with the governance ceiling
 
@@ -1873,6 +1898,36 @@ Writers: `apps/routes_lifecycle.py` (`_app_may_run_after_install`,
 `apps/routes_install.py::handle_install_app`, `apps/default_installs.py`,
 `cli_commands_app.py`. Pinned by
 `test/test_apps_install_registers_nothing_disabled.py`.
+
+### 7.4 An enable or install brings the app's MCP servers to the chats already open
+
+`register_app` writes the app's `<app>:<server>` entries into the agent spec (§1),
+which a new chat mounts at its start. A chat that is already open needs the step an
+MCP page write ends with, so the routes that register an app take it too:
+`routes_lifecycle._reach_open_chats` calls
+`dashboard.handlers.mcp.apply_mcp_change_to_open_chats`. Where every live session
+applies an MCP change itself (`_mcp_hot_reload_active`: kiro-cli's file watcher, KAS
+re-injection, Strands relaunch), it marks the re-injecting and relaunching providers
+and resets nothing; otherwise it resets every session and drains the warm pool, as
+`POST /api/mcp/sync` does. The response carries `sessions_reset`, the number of
+sessions reset (0 when the change applied live).
+
+It runs after a successful `handle_enable_app` (never on the onEnable rollback),
+after `handle_install_app`, and after both registry install routes, each time outside
+the app lifecycle lock, and only when the registration wrote at least one MCP server:
+an app with none leaves every open chat alone and its response has no
+`sessions_reset`. A failure is logged and never fails an enable or install that has
+already committed. The update and the disable and uninstall paths do not take it.
+
+Not covered here: an HTTP server on a gateway-managed backend with no live port yet is
+left out of the registration and written by the health-gated re-registration after
+the route returns, so on a harness that does not watch the spec file it reaches an
+open chat only after a later MCP change or a reset.
+
+Writers: `apps/routes_lifecycle.py::_reach_open_chats`,
+`dashboard/handlers/mcp_agent_sync.py::apply_mcp_change_to_open_chats`, and its call
+sites in `apps/routes_enable.py`, `apps/routes_install.py` and
+`apps/routes_registry.py`. Pinned by `test/test_app_enable_reaches_open_chats.py`.
 
 ## 8. An app's EventBus only exists with a real broadcast function
 
@@ -5970,7 +6025,7 @@ records which module owns which part, so a change lands in its owner.
 | Module under `src/kiro_crew/apps/` | Owns |
 |---|---|
 | `routes.py` | The facade: the only import path and patch surface, installing `kiro_crew._facade_mirror` over the owners below, and the route table (`register_app_routes`) |
-| `routes_lifecycle.py` | The steps the install, update, uninstall, enable and disable handlers share: `_check_min_version`, the dual-pass warning redactor `_redact_warning`, `_register_app_off_loop` / `_deregister_app_off_loop`, `_start_backend_after_install`, `_stop_backend_and_observe`, `_app_may_run_after_install`, `_restore_app_after_failed_update`, `_reinstall_from_registry`, `_suspend_app_for_session_approval_reconsent`, `_refuse_while_startup_hook_runs` and `_unregister_notification_channels` |
+| `routes_lifecycle.py` | The steps the install, update, uninstall, enable and disable handlers share: `_check_min_version`, the dual-pass warning redactor `_redact_warning`, `_register_app_off_loop` / `_deregister_app_off_loop`, `_reach_open_chats` (§7.4), `_start_backend_after_install`, `_stop_backend_and_observe`, `_app_may_run_after_install`, `_restore_app_after_failed_update`, `_reinstall_from_registry`, `_suspend_app_for_session_approval_reconsent`, `_refuse_while_startup_hook_runs` and `_unregister_notification_channels` |
 | `routes_proxy.py` | The reverse proxy from an app's dashboard UI to its own backend (`handle_app_api_proxy`): `_resolve_app_backend_url`, the per-app secret cache it signs with (`_get_app_secret`, `invalidate_app_secret_cache`), the principal claim (`_proxy_principal`), the headers and the `token` query credential it strips (`_forwarded_query`) and the event-stream relay |
 | `routes_static.py` | An installed app's UI bundle (`handle_app_ui_file`, `_open_ui_file` and the stream bounds), the content types the UI and art routes answer with, and `handle_app_dev_mode` |
 | `routes_art.py` | The installed-art route (`handle_app_art_file`) over an app's manifest-declared art (`_declared_art_paths`, `_read_declared_art`), and the git blob proxy (`handle_blob_proxy`, `_fetch_git_blob`) with the repository and ref validators (`_is_safe_repo_identifier`, `_SAFE_REF_RE`), the fetch timeout and concurrency bound, and the blob-cache touch. Both art paths screen on one extension set |

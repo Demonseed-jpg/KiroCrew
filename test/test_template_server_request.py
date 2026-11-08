@@ -110,7 +110,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tsr, "_default_spec_mounts", lambda server: server in seen.get("default_spec", set())
     )
-    monkeypatch.setattr(tsr, "_reach_sessions", reach)
+    monkeypatch.setattr("kiro_crew.dashboard.handlers.mcp.apply_mcp_change_to_open_chats", reach)
     monkeypatch.setattr(
         tsr, "existing_grants", lambda template, server, **_kw: seen.get("grants", [])
     )

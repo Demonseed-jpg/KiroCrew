@@ -54,6 +54,7 @@ from kiro_crew.dashboard.handlers.mcp_agent_sync import (
     _mcp_hot_reload_active,
     _sync_mcp_to_agent,
     _sync_mcp_to_agent_batch,
+    apply_mcp_change_to_open_chats,
 )
 from kiro_crew.dashboard.handlers.mcp_config_entries import (
     _find_server_spec_anywhere,
@@ -490,12 +491,7 @@ async def api_mcp_sync(request: web.Request) -> web.Response:
     # applies it. Skipped only when EVERY process the reset would touch has
     # shown it reconciles on its own; ``sessions_reset: 0`` is then the
     # observable outcome.
-    if _mcp_hot_reload_active(request):
-        sessions_reset = 0
-    else:
-        from kiro_crew.dashboard.handlers.sessions import _reset_all_sessions  # noqa: F811
-
-        sessions_reset = await _reset_all_sessions(request)
+    sessions_reset = await apply_mcp_change_to_open_chats(request)
     return web.json_response(
         {
             "ok": True,

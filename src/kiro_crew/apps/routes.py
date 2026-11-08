@@ -345,6 +345,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _backend_platform_refusal,
         _check_min_version,
         _deregister_app_off_loop,
+        _reach_open_chats,
         _read_app_record,
         _redact_warning,
         _refuse_while_startup_hook_runs,

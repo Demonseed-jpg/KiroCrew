@@ -323,7 +323,7 @@ def test_a_failed_reconcile_is_logged_not_raised(monkeypatch, caplog):
     tsr._reconcile_after_rollback()
 
 
-# ── _reach_sessions ──
+# ── apply_mcp_change_to_open_chats ──
 
 
 def test_sessions_reset_only_when_the_change_cannot_apply_live(monkeypatch):
@@ -334,6 +334,6 @@ def test_sessions_reset_only_when_the_change_cannot_apply_live(monkeypatch):
 
     monkeypatch.setattr(sessions, "_reset_all_sessions", reset)
     monkeypatch.setattr(mcp, "_mcp_hot_reload_active", lambda request: True)
-    assert asyncio.run(tsr._reach_sessions(object())) == 0
+    assert asyncio.run(mcp.apply_mcp_change_to_open_chats(object())) == 0
     monkeypatch.setattr(mcp, "_mcp_hot_reload_active", lambda request: False)
-    assert asyncio.run(tsr._reach_sessions(object())) == 3
+    assert asyncio.run(mcp.apply_mcp_change_to_open_chats(object())) == 3

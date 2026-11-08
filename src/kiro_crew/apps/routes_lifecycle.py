@@ -1,7 +1,8 @@
 """Steps the install, update, uninstall, enable and disable handlers share.
 
 The minimum-version check, warning redaction, registering and deregistering an app off
-the event loop, starting a backend after an install and stopping one with its outcome
+the event loop, bringing a registration's MCP servers to the chats already open,
+starting a backend after an install and stopping one with its outcome
 observed, whether an app may run once installed, restoring an app after a failed update,
 re-installing an installed app from the registry, suspending one for session-approval
 reconsent, the refusal while a startup hook still runs, and dropping an app's
@@ -174,6 +175,30 @@ async def _register_app_off_loop(
     if isinstance(box[0], BaseException):
         raise box[0]
     return box[0]
+
+
+async def _reach_open_chats(request: web.Request, name: str, mcp_servers: list[str]) -> int | None:
+    """Bring the MCP servers a registration of *name* just wrote to the chats already open.
+
+    ``register_app`` writes ``<app>:<server>`` into the agent spec, which a new chat mounts
+    at its start; an open chat needs the step an MCP page write ends with
+    (``dashboard.handlers.mcp.apply_mcp_change_to_open_chats``): applied live where every
+    running session can, else every session is reset. Runs only when *mcp_servers* is not
+    empty. Returns the number of sessions reset, or None when it did not run or failed: a
+    failure is logged and never fails the enable or install that already committed.
+    """
+    if not mcp_servers:
+        return None
+    # Call-time import: ``apps`` sits below ``dashboard`` and must not depend on it at load time.
+    from kiro_crew.dashboard.handlers.mcp import apply_mcp_change_to_open_chats
+
+    try:
+        return await apply_mcp_change_to_open_chats(request)
+    except Exception:
+        logger.warning(
+            "Could not bring app %s's MCP servers to the open chats", name, exc_info=True
+        )
+        return None
 
 
 async def _snapshot_agent_configs_off_loop(name: str) -> dict[str, dict[str, Any]]:

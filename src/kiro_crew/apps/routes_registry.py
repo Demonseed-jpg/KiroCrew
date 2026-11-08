@@ -46,6 +46,7 @@ from kiro_crew.apps.routes_art import _SAFE_REPO_RE, _is_safe_repo_identifier
 from kiro_crew.apps.routes_install import _resync_app_crons_after_update
 from kiro_crew.apps.routes_lifecycle import (
     _app_may_run_after_install,
+    _reach_open_chats,
     _register_app_off_loop,
     _reinstall_from_registry,
     _start_backend_after_install,
@@ -267,6 +268,9 @@ async def handle_registry_install(request: web.Request) -> web.Response:
     sel().log_api_access(
         caller="dashboard", operation="app_registry_install", outcome="completed", resources=name
     )
+    sessions_reset = await _reach_open_chats(request, name, reg.mcp_servers)
+    if sessions_reset is not None:
+        result["sessions_reset"] = sessions_reset
     return web.json_response(result, status=201)
 
 
@@ -375,6 +379,7 @@ async def handle_registry_install_stream(request: web.Request) -> web.StreamResp
     # install, resource registration, backend start — runs under one per-app
     # lock (install_from_registry is lock-free internally).
     async def _locked_install() -> dict[str, Any]:
+        registered_mcp_servers: list[str] = []
         async with app_lifecycle_lock(name):
             # Read before the install, as in handle_registry_install.
             was_installed = await asyncio.to_thread(lambda: get_app(name) is not None)
@@ -399,9 +404,14 @@ async def handle_registry_install_stream(request: web.Request) -> web.StreamResp
                     # backend-less apps.
                     backend_refused = await _start_backend_after_install(r["name"])
                     r["registration"] = reg.to_dict()
+                    registered_mcp_servers = reg.mcp_servers
                     if backend_refused:
                         r["backend_refused"] = backend_refused
-            return r
+        # After the lifecycle lock, as in handle_registry_install.
+        sessions_reset = await _reach_open_chats(request, name, registered_mcp_servers)
+        if sessions_reset is not None:
+            r["sessions_reset"] = sessions_reset
+        return r
 
     install_task = asyncio.create_task(_locked_install())
     drain_task = asyncio.create_task(_drain_queue())

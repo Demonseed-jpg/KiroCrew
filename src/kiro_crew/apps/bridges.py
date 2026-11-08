@@ -67,6 +67,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _deregister_agents,
         _enforce_declared_mcp_tools,
         _global_mcp_specs,
+        _host_mcp_specs,
         _is_within,
         _managed_mcp_spec,
         _materialize_managed_refs,

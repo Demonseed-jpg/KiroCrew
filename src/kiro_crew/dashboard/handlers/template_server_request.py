@@ -526,17 +526,6 @@ def _reconcile_after_rollback() -> None:
         )
 
 
-async def _reach_sessions(request: web.Request) -> int:
-    """Apply live where every live process can, else reset sessions, as an MCP page change does."""
-    from kiro_crew.dashboard.handlers.mcp import _mcp_hot_reload_active
-
-    if _mcp_hot_reload_active(request):
-        return 0
-    from kiro_crew.dashboard.handlers.sessions import _reset_all_sessions
-
-    return int(await _reset_all_sessions(request))
-
-
 #: What the card is told when the record changed but a spec could not be rewritten:
 #: the record is put back, so the card's state and every spec still agree.
 _NOT_REWRITTEN = (
@@ -645,7 +634,9 @@ async def api_template_mcp_addition_add(request: web.Request) -> web.Response:
         "ok",
         f"{template}:{added.server}",
     )
-    applied = {"rebuilt": True, "sessions_reset": await _reach_sessions(request)}
+    from kiro_crew.dashboard.handlers.mcp import apply_mcp_change_to_open_chats
+
+    applied = {"rebuilt": True, "sessions_reset": await apply_mcp_change_to_open_chats(request)}
     return web.json_response(
         {
             "ok": True,
@@ -715,5 +706,7 @@ async def api_template_mcp_addition_remove(request: web.Request) -> web.Response
         _audit(str(request.get("user") or "owner"), operation, "error", "spec_not_rewritten")
         return _deny(503, "spec_not_rewritten", _NOT_REWRITTEN)
     _audit(str(request.get("user") or "owner"), operation, "ok", f"{template}:{server}")
-    applied = {"rebuilt": True, "sessions_reset": await _reach_sessions(request)}
+    from kiro_crew.dashboard.handlers.mcp import apply_mcp_change_to_open_chats
+
+    applied = {"rebuilt": True, "sessions_reset": await apply_mcp_change_to_open_chats(request)}
     return web.json_response({"ok": True, "template": template, "server": server, **applied})
