@@ -54,6 +54,10 @@ PRIVACY:
   * Deliberately NOT ``handlers_system._get_owner_hash()``: that is
     ``HMAC(salt, hostname + ":" + username)``. It never leaves the host today,
     and sending it would change its character entirely.
+  * The machine id a KAS spawn hands the engine (``acp/kas_machine_id.py``) is
+    a separate random value, deliberately NOT derived from this id: the engine
+    sends it beside the person's Kiro sign-in, and this id reaches the collector
+    in every heartbeat, so a derivable one would join the two.
   * The payload is a fixed FIVE-key ALLOWLIST built by :func:`payload`. There
     is no free-form field and no caller-supplied pass-through, so no prompt,
     path, repo name, credential, or model output can reach the wire — not by

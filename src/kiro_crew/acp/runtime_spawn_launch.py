@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from kiro_crew import agent_scratch, member_essential_context, platform_compat
-from kiro_crew.acp import kas_cli_settings, kas_secret_storage
+from kiro_crew.acp import kas_cli_settings, kas_machine_id, kas_secret_storage
 from kiro_crew.acp._dispatch import agent_version_from_init
 from kiro_crew.acp.agent_env import agent_env_overlay
 from kiro_crew.acp.client import (
@@ -1233,7 +1233,9 @@ async def _handshake_client_capabilities(self: AcpRuntime) -> dict[str, Any]:
     call the projection makes: a spec judged here that differed from the one
     projected would turn deferral on for a session with no loader.
     An unreadable spec grants nothing (fail closed: ``enabled: false``).
-    ``secretStorage`` is added first, when :func:`_with_mcp_sign_in_storage` says so.
+    ``secretStorage`` is added first, when :func:`_with_mcp_sign_in_storage` says so,
+    then kiro-cli's ``telemetryEnabled`` opt-out on a host that reads the settings
+    channel, then ``telemetry.machineId`` when :func:`_with_kas_machine_id` says so.
     """
     base = self._harness.client_capabilities
     base = await _with_mcp_sign_in_storage(self, base)
@@ -1249,6 +1251,7 @@ async def _handshake_client_capabilities(self: AcpRuntime) -> dict[str, Any]:
         )
         base = kas_cli_settings.with_telemetry_opt_out(base, telemetry_on)
         self._kas_telemetry_sent = telemetry_on
+    base = await _with_kas_machine_id(self, base)
     if self._tool_search is None:
         return base
     spec = await asyncio.to_thread(self._projected_spawn_spec)
@@ -1351,6 +1354,20 @@ async def _with_mcp_sign_in_storage(runtime: AcpRuntime, base: dict[str, Any]) -
     runtime._mcp_secret_server = kas_secret_storage.SecretStorageServer()
     logger.info("AcpRuntime handshake: remote MCP sign-ins are kept in Crew's grant vault")
     return kas_secret_storage.with_secret_storage(base)
+
+
+async def _with_kas_machine_id(runtime: AcpRuntime, base: dict[str, Any]) -> dict[str, Any]:
+    """*base*, plus ``_meta.kiro.telemetry.machineId`` on a KAS spawn that may send one.
+
+    KAS stamps every telemetry record of the process with that id and records
+    ``""`` without it. Which id, and the opt-outs that send none, are
+    :func:`kas_machine_id.machine_id`'s; it reads files, so it runs off the loop.
+    Every other host is handed *base* unchanged.
+    """
+    if runtime._acp_backend == ACP_BACKEND_KAS:
+        machine_id = await asyncio.to_thread(kas_machine_id.machine_id)
+        return kas_machine_id.with_machine_id(base, machine_id)
+    return base
 
 
 def _projected_spawn_spec(self: AcpRuntime) -> dict[str, Any] | None:

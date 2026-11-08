@@ -132,7 +132,9 @@ class TelemetryConfig:
             "KIROCREW_TELEMETRY_DISABLED=1 or by turning this off; an "
             "enterprise policy can also pin it off via the "
             "capabilities.telemetry governance scope, which this switch cannot "
-            "override. Independent "
+            "override. Turning this off also withholds the separate random "
+            "machine id Kiro Crew gives each KAS engine it starts afterwards. "
+            "Independent "
             "of the 'enabled' switch above, which is local-only metrics "
             "collection and still never egresses.",
         ),

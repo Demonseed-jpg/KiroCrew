@@ -500,7 +500,9 @@ PROVIDER_LABEL_BY_BACKEND: dict = {
 #
 # ``secretStorage`` is NOT in this constant: the spawn adds it to a copy while
 # ``agent.kas_persist_mcp_sign_in`` is on (the default; ``acp/kas_secret_storage.py``),
-# and every other callback stays undeclared (= false).
+# and every other callback stays undeclared (= false). Nor is ``telemetry``: the
+# spawn adds ``telemetry.machineId`` to a copy unless telemetry is opted out
+# (``acp/kas_machine_id.py``), because the id is per installation.
 KAS_CLIENT_CAPABILITIES: dict = {
     **ACP_CLIENT_CAPABILITIES,
     "_meta": {"kiro": {"settings": {}, "openExternalUrl": True, "userInput": True}},

@@ -29,6 +29,7 @@ needs no asset overrides and no token plumbing, because kiro-cli owns both::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
@@ -680,6 +681,41 @@ class TestKasInvocation:
             assert runtime.is_alive()
         finally:
             await runtime.kill()
+
+    @pytest.mark.asyncio
+    async def test_initialize_carries_the_stored_machine_id(self, kas_stub, tmp_path, monkeypatch):
+        """KAS stamps its telemetry with ``_meta.kiro.telemetry.machineId``.
+
+        Told none it records ``""`` for every turn, so the spawn hands it the
+        installation's own random id: the same id on every spawn, and neither
+        the beacon install id nor anything computable from it.
+        """
+        from kiro_crew import beacon
+
+        monkeypatch.delenv(beacon.DISABLE_ENV, raising=False)
+        install_id = beacon.install_id()
+        capture = tmp_path / "init-caps.json"
+        monkeypatch.setenv("KIROCREW_TEST_KAS_INIT_CAPTURE", str(capture))
+        machine_ids = []
+        for n in range(2):
+            runtime = AcpRuntime(
+                work_dir=tmp_path / f"ws-mid-{n}", sandbox_mode="off", acp_backend=ACP_BACKEND_KAS
+            )
+            try:
+                await runtime.spawn()
+                assert runtime.is_alive()
+            finally:
+                await runtime.kill()
+            caps = json.loads(capture.read_text())
+            assert install_id not in json.dumps(caps)
+            machine_ids.append(caps["_meta"]["kiro"]["telemetry"]["machineId"])
+        from kiro_crew.acp import kas_machine_id
+
+        stored = kas_machine_id.stored_machine_id(create=False)
+        assert len(stored) == 64
+        assert machine_ids == [stored, stored]
+        kuts_hash = hashlib.sha256(("kirocrew-metrics-machine-id-v1:" + install_id).encode())
+        assert stored != kuts_hash.hexdigest()
 
     async def _handshake_settings(self, tmp_path, monkeypatch, *, tools, tool_search):
         """Spawn the stub with ``kirocrew``'s spec granting *tools* and return the

@@ -1807,6 +1807,17 @@ There are now **five independent** telemetry paths. Keep them straight:
 a 5s blocking `urllib` call must not delay boot or pin interpreter exit), and
 skipped entirely under `--test-mode` so the offline E2E gate cannot egress.
 
+Not a path of its own: a KAS spawn hands the engine a random id of its own as
+`_meta.kiro.telemetry.machineId`, which the engine stamps on the telemetry it sends
+anyway, beside the signed-in account. Kiro Crew sends nothing itself. The id is
+kept in its own data-home file and is deliberately independent of the beacon
+install id, for the reason the receipt token is: the collector holds the install
+id from every heartbeat, so an id computable from it would join that account's
+telemetry to a heartbeat row. It honors `KIROCREW_TELEMETRY_DISABLED`, the
+`capabilities.telemetry` pin and `telemetry.beacon_enabled`, but not the
+count-only suppressions (CI, a non-default home, the first-run disclosure); see
+[acp-client](acp-client.md) → "KAS machine id".
+
 ### Why it is NOT part of the OTEL trunk
 
 Four independently disqualifying reasons — do **not** "consolidate" them later:

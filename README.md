@@ -301,6 +301,18 @@ entries. Apps from user-configured registries, local-directory installs, and
 self-registered apps emit nothing, so private app names never leave the machine.
 If the receipt-only secret cannot be persisted, the receipt is skipped.
 
+**The KAS engine is given its own machine id.** When Kiro Crew starts KAS,
+Kiro's agent engine, it hands the engine a machine id, and the engine attaches
+it to the telemetry it sends to Kiro under your Kiro sign-in. That id is a
+separate random value kept in the data home. It is not derived from the instance
+id, the heartbeat never carries it, and Kiro Crew sends it nowhere else, so the
+engine's telemetry cannot be joined to a heartbeat. The toggle,
+`kirocrew telemetry disable`, `KIROCREW_TELEMETRY_DISABLED` and an enterprise
+`capabilities.telemetry` policy each withhold it from engines started
+afterwards. Unlike the heartbeat, it does not wait for the first-run disclosure
+and is not paused in CI or for a non-default `KIROCREW_HOME`: Kiro Crew sends
+nothing itself here, it only labels traffic the engine sends anyway.
+
 This list used to be nine fields. Release channel, OS, CPU architecture and
 governance posture were **removed** — each was coarse on its own, but the
 instance id is stable, so those attributes all describe the *same* copy and

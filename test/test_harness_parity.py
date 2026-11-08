@@ -1338,6 +1338,12 @@ _DECLARED_IDENTITY_TESTS: dict[tuple[str, str], str] = {
     "Sending it to any other harness would put an unknown method on its wire.",
     (
         "src/kiro_crew/acp/runtime_spawn_launch.py",
+        "_with_kas_machine_id",
+    ): "``_meta.kiro.telemetry.machineId`` is the KAS engine's own initialize key, which "
+    "it stamps on its telemetry. No other harness defines it, and sending another one a "
+    "per-installation id it never asked for would hand out data for nothing.",
+    (
+        "src/kiro_crew/acp/runtime_spawn_launch.py",
         "_spawn_admitted",
     ): "Only native Kiro loads the alias agent files and workspace resource-inheritance "
     "setting used to bound skill metadata. Other harnesses must keep their own spawn plans.",

@@ -3384,6 +3384,15 @@ The write refusals exist so a pinned host cannot sit storing `beacon_enabled: tr
 behind a control that does nothing: `should_send` already blocks the egress, so
 without them the config file and the UI would both claim "on" while nothing is sent.
 
+**The KAS machine id honors the pin too.** A KAS spawn hands the engine a random
+id of its own, not derived from the install id, as `_meta.kiro.telemetry.machineId`
+(`acp/kas_machine_id.py`; [acp-client](acp-client.md) → "KAS machine id"), which
+the engine stamps on the telemetry it sends anyway; Kiro Crew sends nothing itself,
+so it is not a member of the egress family above. A policy pin withholds it, read
+through `beacon.is_governance_pinned_off()` without an audit row: a refusal only
+withholds an optional field, and the audited probe would write a SEL row for every
+KAS process started.
+
 **Fails CLOSED** (`fail_closed=True`), joining `capabilities.theme_install` /
 `capabilities.publish` rather than diverging from them. Failing open on the reasoning
 that "a wrong deny only loses a heartbeat" would describe the wrong-DENY and ignore
