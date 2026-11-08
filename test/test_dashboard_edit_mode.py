@@ -37,6 +37,21 @@ def _package(view: dict[str, Any]) -> str:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_package_page(_floor_monkeypatch):
+    """No package page in force unless a test says so, so a lineage read here never
+    reaches the real instance store."""
+    from kiro_crew import dashboard_package
+
+    _floor_monkeypatch.setattr(
+        dashboard_package,
+        "read_package_model",
+        lambda slug: SimpleNamespace(
+            model=None, state="empty", state_reason="", from_package=False
+        ),
+    )
+
+
 @pytest.fixture
 def preview_on(monkeypatch):
     monkeypatch.setattr(dashboard_edit_mode, "edit_mode_on", lambda cfg=None: True)
@@ -75,10 +90,21 @@ def test_on_a_block_id_becomes_the_component_id(preview_on):
     assert page.startswith('<section data-dashboard-block="tasks"><h2>')
 
 
-def test_on_a_block_id_that_is_not_a_slug_is_refused(preview_on):
+def test_on_a_block_id_that_is_not_a_slug_is_refused_on_write(preview_on):
     bad = {"blocks": [{"id": 'x" onclick="1', "fields": ["accepted"]}]}
     with pytest.raises(ArtifactValidationError, match=r"view\.blocks\[0\]\.id"):
-        pkg.parse_package(_package(bad))
+        pkg.canonical_package_content(_package(bad))
+
+
+@pytest.mark.parametrize("stored_id", ["openPrs", "Lead", "x" * 60, 'x" onclick="1', 7])
+def test_on_a_stored_block_id_that_is_not_a_slug_still_reads(preview_on, stored_id):
+    """A page stored before ids meant anything keeps drawing with the preview on:
+    the id is left out and the block is a plain section. Reddens if the read refuses."""
+    page = pkg.parse_package(_package({"blocks": [{"id": stored_id, "fields": ["accepted"]}]}))
+    assert page["view"]["html"].startswith("<section><h2>") or page["view"]["html"].startswith(
+        "<section><dl>"
+    )
+    assert "data-dashboard-block" not in page["view"]["html"]
 
 
 DUPLICATE = {
@@ -90,6 +116,24 @@ DUPLICATE = {
 def test_on_the_write_gate_refuses_a_component_id_used_twice(preview_on):
     with pytest.raises(ArtifactValidationError, match="names component 'a' twice"):
         pkg.canonical_package_content(_package(DUPLICATE))
+
+
+def test_the_bridge_forwards_only_keys_the_person_pressed():
+    """A page script's dispatched KeyboardEvent is untrusted and is never forwarded."""
+    bridge = dashboard_frame._EDIT_BRIDGE_JS
+    keydown = bridge[bridge.index("addEventListener('keydown'") :]
+    assert "!event.isTrusted" in keydown[: keydown.index("postMessage")]
+
+
+def test_the_bridge_forwards_the_edit_key_from_a_focused_value_only():
+    """A key typed in the frame never reaches the host window, so the bridge forwards
+    a bare E on a bound value, and nothing with a modifier held."""
+    bridge = dashboard_frame._EDIT_BRIDGE_JS
+    i = bridge.index("kirocrew-dashboard:edit-key")
+    guard = bridge[bridge.rindex("else if", 0, i) : i]
+    assert "bound(event.target)" in guard
+    for modifier in ("ctrlKey", "metaKey", "altKey"):
+        assert f"!event.{modifier}" in guard
 
 
 def test_a_stored_page_with_a_repeated_id_still_reads(preview_on):
@@ -179,7 +223,7 @@ def test_a_fold_value_names_its_fold_and_the_gap_behind_it():
     assert kinds == ["field", "fold", "crew_log"]
     assert out["hops"][1]["path"] == "items[0].accepted"
     assert out["hops"][2]["needs"] == member_dashboard_lineage.NEEDS_FOLD_SEQ
-    assert out["edit"] == {"kind": "none", "reason": "fold"}
+    assert out["edit"] == {"kind": "fold"}
 
 
 def test_a_person_correction_is_the_top_write_and_keeps_the_bots():
@@ -288,13 +332,13 @@ def test_a_script_record_splits_what_the_gateway_stamped_from_what_the_script_sa
                 "stale_after": "2026-11-08T12:00:00+00:00",
                 "failed_at": "2026-11-08T11:00:00+00:00",
                 "last_error": "throttled",
-                "source": "CloudWatch TargetResponseTime p99",
-                "points": [400, 412],
+                "source": {"kind": "cloudwatch", "metric": "Latency", "stat": "p99"},
+                "points": [[1794141900, 400], [1794141960, 412]],
                 "provenance": {
                     "job": "p99-hourly",
                     "run_at": "x",
                     "script": "crons/p.py:run",
-                    "sha": "abc",
+                    "script_sha": "abc",
                 },
             }
         }
@@ -307,13 +351,19 @@ def test_a_script_record_splits_what_the_gateway_stamped_from_what_the_script_sa
         field_found=True,
         custom=custom,
     )
+    kinds = [hop["kind"] for hop in out["hops"]]
+    # Current? still running? which script? what it says it read?
+    assert kinds == ["field", "fold", "record", "freshness", "run", "script", "source"]
     by_kind = {hop["kind"]: hop for hop in out["hops"]}
     assert by_kind["record"]["writer"] == "cron:p99-hourly"
-    assert by_kind["script"]["by"] == "gateway" and by_kind["script"]["sha"] == "abc"
-    assert by_kind["source"]["by"] == "script" and by_kind["source"]["points"] == [400, 412]
+    assert by_kind["script"]["by"] == "gateway" and by_kind["script"]["script_sha"] == "abc"
+    assert by_kind["script"]["needs"] == member_dashboard_lineage.NEEDS_RUN_ID
+    assert (
+        by_kind["source"]["by"] == "script" and by_kind["source"]["source"]["metric"] == "Latency"
+    )
     assert by_kind["freshness"]["by"] == "script"
     assert by_kind["run"]["last_error"] == "throttled"
-    assert out["edit"] == {"kind": "none", "reason": "cron", "writer": "cron:p99-hourly"}
+    assert out["edit"] == {"kind": "source", "writer": "cron:p99-hourly", "job": "p99-hourly"}
 
 
 def test_every_value_leaves_through_the_pages_redaction():
@@ -382,23 +432,31 @@ def test_the_custom_fold_keeps_a_records_lineage_cells():
                 "type": "p99",
                 "data": {"ms": 1},
                 "writer": "cron:x",
-                "source": "CloudWatch p99",
-                "points": [1, 2.5],
-                "provenance": {"job": "x", "sha": "abc", "evil": "dropped"},
+                "source": {"kind": "cloudwatch", "metric": "Latency"},
+                "points": [[1, 2.5]],
+                "provenance": {"job": "x", "script_sha": "abc", "evil": "dropped"},
             }
         ),
     )
     row = state["latest"]["p99"]
-    assert row["source"] == "CloudWatch p99" and row["points"] == [1, 2.5]
-    assert row["provenance"] == {"job": "x", "run_at": "", "script": "", "sha": "abc"}
+    assert row["source"] == {"kind": "cloudwatch", "metric": "Latency"}
+    assert row["points"] == [[1, 2.5]]
+    assert row["provenance"] == {
+        "job": "x",
+        "run_at": "",
+        "script": "",
+        "script_sha": "abc",
+    }
 
 
-def test_the_custom_fold_drops_points_that_are_not_numbers():
+@pytest.mark.parametrize(
+    "extra",
+    [{"points": [[1, True]]}, {"points": [1, 2]}, {"source": {"kind": "ftp"}}],
+)
+def test_the_custom_fold_drops_lineage_cells_it_would_refuse(extra):
     state = fold._custom_start()
-    fold._custom_step(
-        state, _custom({"type": "p", "data": {"v": 1}, "writer": "cron:x", "points": [1, True]})
-    )
-    assert "points" not in state["latest"]["p"]
+    fold._custom_step(state, _custom({"type": "p", "data": {"v": 1}, "writer": "cron:x", **extra}))
+    assert "points" not in state["latest"]["p"] and "source" not in state["latest"]["p"]
 
 
 # ---------------------------------------------------------------- record door
@@ -407,17 +465,46 @@ def test_the_custom_fold_drops_points_that_are_not_numbers():
 @pytest.mark.parametrize(
     "body,code",
     [
-        ({"source": "x\ny"}, "bad_source"),
-        ({"source": "s" * 241}, "bad_source"),
+        ({"source": "CloudWatch"}, "bad_source"),
+        ({"source": {"kind": "ftp"}}, "bad_source"),
+        ({"source": {"kind": "other"}}, "bad_source"),
+        ({"source": {"kind": "http", "console_url": "http://x"}}, "bad_source"),
+        ({"source": {"kind": "http", "label": "s" * 3000}}, "bad_source"),
         ({"points": []}, "bad_points"),
-        ({"points": [1, "2"]}, "bad_points"),
-        ({"points": [float("inf")]}, "bad_points"),
-        ({"source": "CloudWatch", "points": [1, 2]}, None),
+        ({"points": [[1, "2"]]}, "bad_points"),
+        ({"points": [[1, float("inf")]]}, "bad_points"),
+        ({"points": [1, 2]}, "bad_points"),
+        (
+            {
+                "source": {"kind": "cloudwatch", "console_url": "https://console.example"},
+                "points": [[1794141900, 351]],
+            },
+            None,
+        ),
     ],
 )
 def test_the_record_door_checks_a_declared_source_and_points(body, code):
     refused = agent_panel_record._lineage_body_refusal(body)
     assert (refused[0] if refused else None) == code
+
+
+def test_a_source_is_judged_in_the_form_it_is_stored():
+    """A descriptor that fits raw but not once its credential is redacted is refused
+    at the door, instead of being accepted and then dropped by the fold. Reddens if
+    the door stops judging the scrubbed form."""
+    from kiro_crew.crew_log.entry_types import CUSTOM_SOURCE_BYTES
+    from kiro_crew.crew_log.projection_dashboard import custom_source_refusal
+
+    def source(pad):
+        return {"kind": "http", "label": "p" * pad, "headers": {"Authorization": "Bearer ab12"}}
+
+    size = len(json.dumps(source(0), ensure_ascii=False).encode("utf-8"))
+    raw = source(CUSTOM_SOURCE_BYTES - size - 2)
+    assert custom_source_refusal(raw) == ""  # it fits as sent
+    stored, refused = agent_panel_record._stored_source(raw)
+    assert stored is None and refused.startswith("after redaction")
+    small, ok = agent_panel_record._stored_source(source(0))
+    assert ok == "" and "Bearer" not in json.dumps(small)
 
 
 def test_the_gateway_stamps_the_job_and_the_scripts_sha(tmp_path, monkeypatch):
@@ -433,7 +520,8 @@ def test_the_gateway_stamps_the_job_and_the_scripts_sha(tmp_path, monkeypatch):
     import hashlib
 
     assert stamp["job"] == "j1" and stamp["script"] == "p.py:run"
-    assert stamp["sha"] == hashlib.sha256(script.read_bytes()).hexdigest()[:12]
+    assert stamp["script_sha"] == hashlib.sha256(script.read_bytes()).hexdigest()
+    assert "run_id" not in stamp
     assert agent_panel_record.cron_provenance(state, "cron:gone")["script"] == ""
 
 
@@ -475,6 +563,293 @@ async def test_off_both_routes_answer_not_enabled(preview_off, method, path):
         assert (await resp.json())["code"] == "not_enabled"
 
 
+# ------------------------------------------------------------------ the routes, on
+
+
+@pytest.fixture
+def gate_open(preview_on, monkeypatch):
+    """The preview on and the member, owner and agent-caller checks passing, so a
+    route test exercises the route's own logic."""
+    from kiro_crew.dashboard.handlers import member_dashboard as md
+
+    async def resolve(request):
+        return ("atlas", "Atlas")
+
+    async def owner_only(request, operation):
+        return None
+
+    monkeypatch.setattr(md, "_resolve", resolve)
+    monkeypatch.setattr(md, "_owner_only", owner_only)
+    monkeypatch.setattr(md, "_refuse_agent_caller", lambda request, op, message: None)
+    return md
+
+
+async def _call(method, path, **kwargs):
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    app = web.Application()
+    member_dashboard_lineage.register_member_dashboard_lineage_routes(app)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.request(method, path, **kwargs)
+        return resp.status, await resp.json()
+
+
+_LINEAGE = "/api/members/atlas/dashboard/lineage?member=Atlas&path=verdict"
+_CORRECT = "/api/members/atlas/dashboard/correct?member=Atlas"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer,status,code",
+    [("no_page", 404, "no_page"), ("invalid_path", 400, "invalid_path"), (None, 500, None)],
+)
+async def test_the_lineage_route_answers_a_refusal_or_a_failure_by_its_code(
+    gate_open, monkeypatch, answer, status, code
+):
+    def read(slug, member, path, state):
+        if answer is None:
+            raise OSError("disk")
+        return answer
+
+    monkeypatch.setattr(member_dashboard_lineage, "_read_lineage", read)
+    got_status, body = await _call("GET", _LINEAGE)
+    assert got_status == status
+    assert body["code"] == (code or "lineage_failed")
+
+
+@pytest.mark.asyncio
+async def test_the_lineage_route_returns_the_chain(gate_open, monkeypatch):
+    monkeypatch.setattr(
+        member_dashboard_lineage, "_read_lineage", lambda *a: {"path": "verdict", "hops": []}
+    )
+    assert await _call("GET", _LINEAGE) == (200, {"path": "verdict", "hops": []})
+
+
+def test_the_lineage_read_refuses_a_bad_path_a_missing_page_and_an_undeclared_field(
+    monkeypatch,
+):
+    from kiro_crew import dashboard_agentic
+
+    read = member_dashboard_lineage._read_lineage
+    assert read("atlas", "Atlas", "Items", None) == "invalid_path"
+    monkeypatch.setattr(dashboard_agentic, "page_in_force", lambda slug: None)
+    assert read("atlas", "Atlas", "verdict", None) == "no_page"
+    manifest = SimpleNamespace(fields={})
+    monkeypatch.setattr(dashboard_agentic, "page_in_force", lambda slug: (None, manifest))
+    assert read("atlas", "Atlas", "verdict", None) == "field_not_declared"
+
+
+def test_a_package_page_is_traced_against_the_package_not_the_template(monkeypatch):
+    """The read route serves an older record's bound package; the lineage must read
+    that package's fields, not the template's. Reddens if `_read_lineage` goes back to
+    `page_in_force` alone."""
+    from kiro_crew import dashboard_agentic, dashboard_package
+
+    package = SimpleNamespace(fields={"p99": _spec("p99", fold_name="custom", path="latest.p99")})
+    template = SimpleNamespace(fields={"accepted": _spec("accepted", fold_name="w", path="a")})
+    monkeypatch.setattr(
+        dashboard_package,
+        "read_package_model",
+        lambda slug: SimpleNamespace(
+            model=SimpleNamespace(manifest=package),
+            state="live",
+            state_reason="",
+            from_package=True,
+        ),
+    )
+    monkeypatch.setattr(dashboard_agentic, "page_in_force", lambda slug: (None, template))
+    assert member_dashboard_lineage._manifest_in_force("atlas") is package
+    assert member_dashboard_lineage._read_lineage("atlas", "Atlas", "accepted", None) == (
+        "field_not_declared"
+    )
+
+
+def test_the_lineage_read_traces_a_script_record_through_the_custom_fold(monkeypatch):
+    from kiro_crew import dashboard_agentic
+    from kiro_crew.crew_log import projection
+    from kiro_crew.dashboard.handlers import member_dashboard as md
+
+    spec = _spec("p99", fold_name="custom", path="latest.p99.data.ms")
+    custom = {"latest": {"p99": {"writer": "cron:p99-probe", "data": {"ms": 412}}}}
+    monkeypatch.setattr(
+        dashboard_agentic,
+        "page_in_force",
+        lambda slug: (None, SimpleNamespace(fields={"p99": spec})),
+    )
+    monkeypatch.setattr(md, "_dashboard_slot", lambda member, slug: "slot")
+    monkeypatch.setattr(
+        md, "read_fields", lambda *a, **k: SimpleNamespace(fields={"p99": 412}, missing=[])
+    )
+    monkeypatch.setattr(md, "page_safe_for", lambda state, slot: lambda value: value)
+    monkeypatch.setattr(
+        projection, "read_slot_projection", lambda slot, name: SimpleNamespace(value=custom)
+    )
+    out = member_dashboard_lineage._read_lineage("atlas", "Atlas", "p99", None)
+    assert out["kind"] == "custom" and out["value"] == 412
+    assert out["edit"] == {"kind": "source", "writer": "cron:p99-probe", "job": "p99-probe"}
+
+
+def test_a_custom_path_that_is_not_a_latest_record_has_no_row():
+    assert member_dashboard_lineage._custom_row({"latest": {}}, "items") == ("", None)
+    assert member_dashboard_lineage._custom_row(None, "latest.p99") == ("p99", None)
+
+
+@pytest.fixture
+def correctable(gate_open, monkeypatch):
+    """A live page whose ``verdict`` takes a string, and a log that takes the entry.
+    Returns the appended entries, so a test reads what the route wrote."""
+    from kiro_crew import agent_panel, dashboard_agentic, dashboard_package
+    from kiro_crew.crew_log import emit as crew_log_emit
+    from kiro_crew.platform import context as platform_context
+
+    written: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        dashboard_package,
+        "read_package_model",
+        lambda slug: SimpleNamespace(state="live", state_reason="", model=MODEL),
+    )
+    monkeypatch.setattr(dashboard_agentic, "package_refusal", lambda *a: None)
+    monkeypatch.setattr(
+        dashboard_agentic,
+        "check_write",
+        lambda model, field, value: {"field": field, "value": value, "type": "text"},
+    )
+    monkeypatch.setattr(agent_panel, "crew_key", lambda member: "crew:atlas")
+    monkeypatch.setattr(platform_context, "redact_via_context", lambda text: text)
+    monkeypatch.setattr(crew_log_emit, "enabled", lambda: True)
+
+    def append(slug, member, entry):
+        written.append(entry)
+        return True
+
+    monkeypatch.setattr(member_dashboard_lineage, "_append_correction", append)
+    return written
+
+
+@pytest.mark.asyncio
+async def test_a_persons_correction_is_written_as_theirs(correctable):
+    status, body = await _call(
+        "POST", _CORRECT, json={"field": "verdict", "value": "green", "reason": "CI is green"}
+    )
+    assert (status, body) == (200, {"ok": True, "field": "verdict"})
+    assert correctable == [
+        {
+            "field": "verdict",
+            "value": "green",
+            "type": "text",
+            "crew_key": "crew:atlas",
+            "actor": "person",
+            "reason": "CI is green",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs,status,code",
+    [
+        ({"data": "{", "headers": {"Content-Type": "application/json"}}, 400, "invalid_json"),
+        ({"json": ["verdict"]}, 400, "invalid_body"),
+        ({"json": {"field": "verdict"}}, 400, "invalid_body"),
+        ({"json": {"field": "verdict", "value": "x", "reason": "r" * 241}}, 400, "invalid_reason"),
+        ({"json": {"field": "verdict", "value": "x", "reason": "a\nb"}}, 400, "invalid_reason"),
+    ],
+)
+async def test_a_correction_body_that_is_not_one_field_and_one_line_is_refused(
+    correctable, kwargs, status, code
+):
+    got_status, body = await _call("POST", _CORRECT, **kwargs)
+    assert (got_status, body["code"]) == (status, code)
+    assert correctable == []
+
+
+@pytest.mark.asyncio
+async def test_a_reason_is_measured_as_it_is_stored(correctable, monkeypatch):
+    """The fold keeps at most DASHBOARD_REASON_LIMIT characters of the REDACTED reason,
+    so the route measures that, not the raw text, and nothing is cut silently."""
+    from kiro_crew.crew_log.entry_types import DASHBOARD_REASON_LIMIT
+    from kiro_crew.platform import context as platform_context
+
+    monkeypatch.setattr(platform_context, "redact_via_context", lambda text: text + "[REDACTED]")
+    reason = "r" * (DASHBOARD_REASON_LIMIT - 5)
+    status, body = await _call(
+        "POST", _CORRECT, json={"field": "verdict", "value": "x", "reason": reason}
+    )
+    assert (status, body["code"]) == (400, "invalid_reason") and correctable == []
+
+
+@pytest.mark.asyncio
+async def test_a_bot_cannot_make_a_correction(correctable, monkeypatch):
+    from aiohttp import web
+
+    from kiro_crew.dashboard.handlers import member_dashboard as md
+
+    monkeypatch.setattr(
+        md,
+        "_refuse_agent_caller",
+        lambda request, op, message: web.json_response({"code": "agent_caller"}, status=403),
+    )
+    status, _body = await _call("POST", _CORRECT, json={"field": "verdict", "value": "x"})
+    assert status == 403 and correctable == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unreadable", "refused", "not_scalar", "log_off", "append"])
+async def test_a_correction_the_page_or_the_log_cannot_take_is_refused(
+    correctable, monkeypatch, failure
+):
+    from kiro_crew import dashboard_agentic, dashboard_package
+    from kiro_crew.crew_log import emit as crew_log_emit
+
+    if failure == "unreadable":
+
+        def unreadable(slug):
+            raise dashboard_package.PackageReadError("gone")
+
+        monkeypatch.setattr(dashboard_package, "read_package_model", unreadable)
+    elif failure == "refused":
+
+        def refused(model, field, value):
+            raise dashboard_agentic.WriteRefused("type_mismatch", field, "not a string")
+
+        monkeypatch.setattr(dashboard_agentic, "check_write", refused)
+    elif failure == "not_scalar":
+        monkeypatch.setattr(
+            dashboard_agentic, "check_write", lambda m, f, v: {"field": f, "type": "array"}
+        )
+    elif failure == "log_off":
+        monkeypatch.setattr(crew_log_emit, "enabled", lambda: False)
+    else:
+        monkeypatch.setattr(member_dashboard_lineage, "_append_correction", lambda *a: False)
+    status, body = await _call("POST", _CORRECT, json={"field": "verdict", "value": "x"})
+    expected = {
+        "unreadable": (503, "package_unreadable"),
+        "refused": (400, "type_mismatch"),
+        "not_scalar": (400, "not_scalar"),
+        "log_off": (503, "crew_log_off"),
+        "append": (503, "append_failed"),
+    }[failure]
+    assert (status, body["code"]) == expected
+    if failure != "append":
+        assert correctable == []
+
+
+def test_a_correction_needs_the_bots_session_and_an_entry_that_fits(monkeypatch):
+    from kiro_crew.crew_log import emit as crew_log_emit
+    from kiro_crew.dashboard.handlers import member_dashboard as md
+
+    append = member_dashboard_lineage._append_correction
+    monkeypatch.setattr(md, "_write_session", lambda slug, member: "")
+    assert append("atlas", "Atlas", {}) is False
+    monkeypatch.setattr(md, "_write_session", lambda slug, member: "unit")
+    monkeypatch.setattr(crew_log_emit, "dashboard_entry_fits", lambda kind, entry: False)
+    assert append("atlas", "Atlas", {}) is False
+    monkeypatch.setattr(crew_log_emit, "dashboard_entry_fits", lambda kind, entry: True)
+    monkeypatch.setattr(crew_log_emit, "on_dashboard_agentic", lambda unit, entry, timeout: True)
+    assert append("atlas", "Atlas", {}) is True
+
+
 def test_the_bot_is_told_about_a_persons_correction(preview_on, monkeypatch):
     from kiro_crew import dashboard_agentic
     from kiro_crew.crew_log import projection
@@ -492,6 +867,42 @@ def test_the_bot_is_told_about_a_persons_correction(preview_on, monkeypatch):
     )
     line = dashboard_agentic.person_corrections_line("atlas", "Atlas", ["verdict", "other"])
     assert 'verdict = "green" at T ("fixed")' in line and "other" not in line
+
+
+def test_a_warm_turn_tells_the_bot_about_a_persons_correction(preview_on, monkeypatch):
+    """A Bot with no member_id gets its member section only at session start, so the
+    warm turn's own notice must carry the correction, or the next turn can write over
+    the person's value without being told. Reddens if `unresolved_notice` drops
+    `person_corrections_line`."""
+    from kiro_crew import dashboard_agentic
+    from kiro_crew.crew_log import projection
+    from kiro_crew.dashboard.handlers import member_dashboard
+    from kiro_crew.dashboard_templates.manifest import parse_manifest
+
+    manifest = parse_manifest(
+        {
+            "id": "warm-probe",
+            "version": 1,
+            "title": "Warm probe",
+            "description": "a page for this case",
+            "source": "user",
+            "fields": {"verdict": {"type": "string", "source": {"agentic": True}}},
+        }
+    )
+    rows = {"verdict": {"value": "green", "at": "T", "actor": "person", "reason": "fixed"}}
+    monkeypatch.setattr(dashboard_agentic, "_read_page", lambda slug: ({}, manifest, ""))
+    monkeypatch.setattr(dashboard_agentic, "_crew_panel_on", lambda: True)
+    monkeypatch.setattr(dashboard_agentic, "_unresolved_fold_fields", lambda *a: {})
+    monkeypatch.setattr(dashboard_agentic, "stale_fields_enabled", lambda: False)
+    monkeypatch.setattr(member_dashboard, "_dashboard_slot", lambda member, slug: "slot")
+    monkeypatch.setattr(
+        projection,
+        "read_slot_projection",
+        lambda slot, name: SimpleNamespace(value={"fields": rows}),
+    )
+    notice = dashboard_agentic.unresolved_notice("atlas", "Atlas")
+    assert notice.startswith("[DASHBOARD]\nThe person corrected these values"), notice
+    assert 'verdict = "green" at T ("fixed")' in notice
 
 
 def test_off_the_bot_is_told_nothing(preview_off):

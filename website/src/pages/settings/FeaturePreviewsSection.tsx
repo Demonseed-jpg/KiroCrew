@@ -12,7 +12,7 @@ import { Btn } from '../../components/ui'
 import { api } from '../../api/client'
 import { ApiError } from '../../api/apiError'
 import { useSharedCrewPreviewSetting } from './sharedCrewPreviewSetting'
-import { PREVIEW_ARTIFACT_DEPLOY, PREVIEW_CREW_MODE, PREVIEW_CREW_OAUTH, PREVIEW_DASHBOARD_STALE_FIELDS, PREVIEW_EXPLORE, PREVIEW_FOLDER_CONDUCTOR, PREVIEW_LAYOUT_HARNESS, PREVIEW_MATE_SESSIONS, PREVIEW_REMOTE_CREW_CHAT, PREVIEW_SESSION_ENVIRONMENTS, PREVIEW_WEBHOOKS, setPreviewFlag, setRemoteCrewChat } from '../../utils/previewFlags'
+import { PREVIEW_ARTIFACT_DEPLOY, PREVIEW_CREW_MODE, PREVIEW_CREW_OAUTH, PREVIEW_DASHBOARD_EDIT_MODE, PREVIEW_DASHBOARD_STALE_FIELDS, PREVIEW_EXPLORE, PREVIEW_FOLDER_CONDUCTOR, PREVIEW_LAYOUT_HARNESS, PREVIEW_MATE_SESSIONS, PREVIEW_REMOTE_CREW_CHAT, PREVIEW_SESSION_ENVIRONMENTS, PREVIEW_WEBHOOKS, setPreviewFlag, setRemoteCrewChat } from '../../utils/previewFlags'
 import ErrorBoundary from '../../components/ErrorBoundary'
 import { KasBundleCard } from '../developer/KasBundleCard'
 import { KIRO_SIGN_IN_BACKEND } from '../developer/kiroSignInLink'
@@ -124,6 +124,7 @@ function previewFlagLabel(flag: string): string {
     case PREVIEW_CREW_MODE: return i18nT('pages.developer.featurePreviewsTab.crew_mode')
     case PREVIEW_EXPLORE: return i18nT('pages.developer.featurePreviewsTab.explore')
     case PREVIEW_CREW_OAUTH: return i18nT('pages.developer.featurePreviewsTab.crew_oauth')
+    case PREVIEW_DASHBOARD_EDIT_MODE: return i18nT('pages.developer.featurePreviewsTab.dashboard_edit_mode')
     case PREVIEW_REMOTE_CREW_CHAT: return i18nT('pages.developer.featurePreviewsTab.chat_on_a_crew')
     case PREVIEW_LAYOUT_HARNESS: return i18nT('pages.developer.featurePreviewsTab.layout_harness')
     case PREVIEW_FOLDER_CONDUCTOR: return i18nT('pages.developer.featurePreviewsTab.folder_conductor')
@@ -162,6 +163,7 @@ export function FeaturePreviewsSection() {
   const crewMode = usePreviewFlag(PREVIEW_CREW_MODE)
   const explore = usePreviewFlag(PREVIEW_EXPLORE)
   const crewOauth = usePreviewFlag(PREVIEW_CREW_OAUTH)
+  const dashboardEditMode = usePreviewFlag(PREVIEW_DASHBOARD_EDIT_MODE)
   const writeError = usePreviewFlagWriteError()
   const [gatewayRestarting, setGatewayRestarting] = useState(false)
   const [restartFailed, setRestartFailed] = useState(false)
@@ -336,6 +338,19 @@ export function FeaturePreviewsSection() {
           hint={i18nT('pages.developer.featurePreviewsTab.crew_oauth_desc')}
           checked={crewOauth}
           onChange={v => setPreviewFlag(PREVIEW_CREW_OAUTH, v)}
+        />
+      </SettingsCard>
+      {/* Dashboard edit mode (`dashboard.feature_previews.dashboard_edit_mode`): the
+          Edit switch on a Bot's Dashboard tab. Also read by the gateway, which composes
+          the frame's edit bridge and answers the lineage and correct routes only with it
+          on. A plain switch: the Edit button appears on the Dashboard tab itself. */}
+      <SettingsCard>
+        <SettingsToggle
+          label={i18nT('pages.developer.featurePreviewsTab.dashboard_edit_mode')}
+          description={i18nT('pages.developer.featurePreviewsTab.dashboard_edit_mode_desc_summary')}
+          hint={i18nT('pages.developer.featurePreviewsTab.dashboard_edit_mode_desc')}
+          checked={dashboardEditMode}
+          onChange={v => setPreviewFlag(PREVIEW_DASHBOARD_EDIT_MODE, v)}
         />
       </SettingsCard>
       {/* Shared Crew (People, invites, shared sessions). Unlike the flags above, the

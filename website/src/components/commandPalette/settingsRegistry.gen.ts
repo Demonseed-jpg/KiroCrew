@@ -2222,6 +2222,19 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     }
   },
   {
+    "id": "developer.dashboard-edit-mode",
+    "label": "Dashboard edit mode",
+    "labelKey": "pages.developer.featurePreviewsTab.dashboard_edit_mode",
+    "description": "Adds Edit to a Bot's Dashboard: point at a value to see where it came from, flip a component to ask the Bot to change it, and correct a value the Bot wrote.",
+    "hint": "Every lineage is built by the gateway from its own record; the page only says which field is under the pointer. Off, every Dashboard is as before.",
+    "tab": "developer",
+    "type": "toggle",
+    "occurrence": 1,
+    "params": {
+      "sub": "feature-previews"
+    }
+  },
+  {
     "id": "developer.decisions-jev",
     "label": "Decisions (Jev)",
     "labelKey": "pages.developer.featurePreviewsTab.decisions",

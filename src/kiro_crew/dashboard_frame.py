@@ -1151,8 +1151,26 @@ _EDIT_BRIDGE_JS: Final[str] = f"""
     lit = fn || null;
     if (lit) {{ try {{ lit(true); }} catch (err) {{}} }}
   }}
-  function post(seq, path, rect, block) {{
-    parent.postMessage({{ type: 'kirocrew-dashboard:picked', seq: seq, path: path, rect: rect, block: block }}, '*');
+  // The component under a point: its id, its rect, and the fields bound inside it, so
+  // the host can flip it and list its provider. Names only; the host checks each one.
+  function blockAt(node) {{
+    var id = blockOf(node);
+    if (!id) return {{ block: '', blockRect: null, blockFields: [] }};
+    var el = node.closest('[{_BLOCK_ATTRIBUTE}]');
+    var names = [];
+    var cells = el.querySelectorAll('[{BINDING_ATTRIBUTE}]');
+    for (var c = 0; c < cells.length && names.length < 32; c++) {{
+      var name = clean(cells[c].getAttribute({BINDING_ATTRIBUTE!r}));
+      if (name && names.indexOf(name) === -1) names.push(name);
+    }}
+    return {{ block: id, blockRect: box(el.getBoundingClientRect()), blockFields: names }};
+  }}
+  function post(seq, path, rect, node) {{
+    var info = blockAt(node);
+    parent.postMessage({{
+      type: 'kirocrew-dashboard:picked', seq: seq, path: path, rect: rect,
+      block: info.block, blockRect: info.blockRect, blockFields: info.blockFields
+    }}, '*');
   }}
   function bound(node) {{
     return node && node.closest ? node.closest('[{BINDING_ATTRIBUTE}]') : null;
@@ -1162,7 +1180,7 @@ _EDIT_BRIDGE_JS: Final[str] = f"""
     var cell = bound(node);
     if (cell) {{
       glow(null);
-      post(seq, clean(cell.getAttribute({BINDING_ATTRIBUTE!r})), box(cell.getBoundingClientRect()), blockOf(cell));
+      post(seq, clean(cell.getAttribute({BINDING_ATTRIBUTE!r})), box(cell.getBoundingClientRect()), cell);
       return;
     }}
     for (var i = 0; i < pickers.length; i++) {{
@@ -1173,11 +1191,11 @@ _EDIT_BRIDGE_JS: Final[str] = f"""
       var path = clean(hit.path);
       if (!path) continue;
       glow(typeof hit.glow === 'function' ? hit.glow : null);
-      post(seq, path, box(hit.rect) || {{ x: x - 4, y: y - 4, w: 8, h: 8 }}, blockOf(node));
+      post(seq, path, box(hit.rect) || {{ x: x - 4, y: y - 4, w: 8, h: 8 }}, node);
       return;
     }}
     glow(null);
-    post(seq, null, null, blockOf(node));
+    post(seq, null, null, node);
   }}
   function setEdit(next) {{
     on = next;
@@ -1209,7 +1227,7 @@ _EDIT_BRIDGE_JS: Final[str] = f"""
       var seq = typeof data.seq === 'number' ? data.seq : 0;
       if (typeof data.x !== 'number' || typeof data.y !== 'number') {{
         glow(null);
-        post(seq, null, null, '');
+        post(seq, null, null, null);
         return;
       }}
       at(seq, data.x, data.y);
@@ -1230,13 +1248,31 @@ _EDIT_BRIDGE_JS: Final[str] = f"""
   addEventListener('focusin', function (event) {{
     if (!on) return;
     var cell = bound(event.target);
-    if (cell) post(-1, clean(cell.getAttribute({BINDING_ATTRIBUTE!r})), box(cell.getBoundingClientRect()), blockOf(cell));
+    if (cell) post(-1, clean(cell.getAttribute({BINDING_ATTRIBUTE!r})), box(cell.getBoundingClientRect()), cell);
   }});
   addEventListener('focusout', function (event) {{
-    if (on && bound(event.target)) post(-1, null, null, '');
+    if (on && bound(event.target)) post(-1, null, null, null);
   }});
   addEventListener('keydown', function (event) {{
-    if (on && event.key === 'Escape') parent.postMessage({{ type: 'kirocrew-dashboard:escape' }}, '*');
+    // Only a key the person pressed: a page script's dispatched KeyboardEvent is not
+    // trusted, so it is never forwarded. (A page can still post the message itself;
+    // the host is what refuses to let any frame message discard a draft.)
+    if (!on || !event.isTrusted) return;
+    if (event.key === 'Escape') {{
+      parent.postMessage({{ type: 'kirocrew-dashboard:escape' }}, '*');
+    }} else if ((event.key === 'Enter' || event.key === ' ') && bound(event.target)) {{
+      // The keyboard's click: the host opens the focused value's component, as a
+      // click on it does. The pick it acts on is the one focusin just posted.
+      event.preventDefault();
+      parent.postMessage({{ type: 'kirocrew-dashboard:activate' }}, '*');
+    }} else if ((event.key === 'e' || event.key === 'E') && bound(event.target)
+        && !event.ctrlKey && !event.metaKey && !event.altKey) {{
+      // The Edit shortcut on a focused value: a key typed in the frame never reaches
+      // the host's window, so it is forwarded. Only on a bound value, which is not an
+      // editable field, so no letter typed into a page's own input is taken.
+      event.preventDefault();
+      parent.postMessage({{ type: 'kirocrew-dashboard:edit-key' }}, '*');
+    }}
   }});
 }})();
 """

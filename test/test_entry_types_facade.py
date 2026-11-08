@@ -91,7 +91,7 @@ _GOLDEN_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
         ("work/charged", "dfafeefd53bcb426be1351ea831bb481"),
         ("panel/published", "3bed4520ab9f3b183255124dfa140c1e"),
         ("dashboard/instance_changed", "e89026634b8f99bc617fc02e0839cecc"),
-        ("dashboard/agentic_value", "9ba35f808be9aa3cd45712079b8a9403"),
+        ("dashboard/agentic_value", "c02e7fdd576a925b529b6793180ddfa8"),
         ("dashboard/agentic_refused", "84c3b73827ca0cc5c8d2125efa82e869"),
         ("card/proposed", "3aa4b12a8444db31ec2704d9b4206cf1"),
         ("card/finished", "7b65b135a4f6c271df8f31f42152632b"),
@@ -100,7 +100,7 @@ _GOLDEN_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
         ("guide/finished", "613fdb310da277c35eea97f7911d901b"),
         ("dashboard/goal_recorded", "efb93c3415691b9494f59daee2952a64"),
         ("dashboard/waiting_changed", "c66ee05089867149eb2c7cdfa2e2d8a5"),
-        ("dashboard/custom_value", "081599d743b2ec9d384eb75653350287"),
+        ("dashboard/custom_value", "0fb6b984f62fb8ea5e6dfa4a73beb373"),
         ("dashboard/custom_failed", "144633a23583fc8f2eca57e14a8120b6"),
     ),
     KIND_CREW: (
@@ -112,7 +112,7 @@ _GOLDEN_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
 #: SHA-256 of ``render_markdown(kind)`` when the registry was split into owners. The
 #: member kind declares nothing here, so its digest is of the heading alone.
 _GOLDEN_RENDER: dict[str, str] = {
-    KIND_SESSION: "217fef04a683a77ef6a57a4019f77e4dd364df38b9081bf0876c638a9e264b65",
+    KIND_SESSION: "7c59c53c19e2e34826b015f127cce71fafa6a2c7b8069d1ed8c949ccba75674d",
     KIND_CREW: "b6938d4f70730ae5ffce4ec6983a609443976a9fca7b013c04152e426dd8be8e",
     "member": "5cb4ea02ed8121eb6b285806b4723251aed568df0aa54b9ac8505c9ad389fa8d",
 }

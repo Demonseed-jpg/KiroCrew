@@ -1631,7 +1631,8 @@ def unresolved_notice(slug: str, member: str) -> str:
     in force, not locked, the crew panel on -- without the rest of the block, which
     the section already carried. No upkeep sync: that is the section's job. With the
     ``dashboard_stale_fields`` preview on it also carries :func:`stale_line`, which a
-    field crosses between warm turns just as a binding breaks. TOTAL.
+    field crosses between warm turns just as a binding breaks, and with
+    ``dashboard_edit_mode`` on, :func:`person_corrections_line`. TOTAL.
     """
     if not member:
         return ""
@@ -1652,6 +1653,9 @@ def unresolved_notice(slug: str, member: str) -> str:
         # which still takes field writes -- the same gates as in `turn_block`.
         if agentic_fields(manifest) and stale_fields_enabled():
             lines.append(stale_notice(manifest, _member_slot(member, slug)))
+        # The person's corrections (edit mode preview on) ride here as in `turn_block`:
+        # a correction made between warm turns is the next turn's news.
+        lines.append(person_corrections_line(slug, member, sorted(agentic_fields(manifest))))
         text = "\n".join(line for line in lines if line)
     except Exception:
         logger.debug("dashboard: %r's warm-turn notice is unreadable", slug, exc_info=True)
