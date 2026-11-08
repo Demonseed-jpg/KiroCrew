@@ -414,7 +414,8 @@ async def test_an_observation_the_service_declined_is_not_recorded(tmp_path):
 
 
 def test_the_producer_vocabulary_is_closed_and_starts_with_the_probe():
-    assert OBJECT_PRODUCERS == ("probe",)
+    # Each is code: the monitor's probe, the warm welcome's PR read, accept_eval.
+    assert OBJECT_PRODUCERS == ("probe", "warm_brief", "accept_eval")
     spec = SESSION_ENTRY_TYPES[ENTRY_TYPE]
     producer = next(field for field in spec.fields if field.name == "producer")
     assert producer.enum_closed

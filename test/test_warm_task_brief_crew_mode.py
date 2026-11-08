@@ -103,7 +103,6 @@ async def test_crew_mode_return_after_45_minutes_briefs_once(monkeypatch):
     # One background call per qualifying return, the crewmate's cost.
     assert len(prompts) == 1
     assert "You are the conductor in this chat." in prompts[0]
-    assert "which wait on the owner" in prompts[0]
     assert "Ship the welcome in Crew Mode" in prompts[0]
     assert "Which layout?" in prompts[0]
     result = slot.rows[-1]
@@ -111,11 +110,21 @@ async def test_crew_mode_return_after_45_minutes_briefs_once(monkeypatch):
     # brief shows no count rather than one that reads like today's progress.
     assert "progress" not in result["meta"]["brief"]
     assert '"goal_progress": null' in prompts[0]
-    # The gateway lists what waits on the owner from the ledger, not the model.
-    assert result["meta"]["brief"]["waiting"] == [
-        {"title": "Add the panel", "ask": "Which layout?"}
+    # The gateway lists what waits on the owner from the ledger, not the model:
+    # the count, one card with the item's own state, and the Board link.
+    brief = result["meta"]["brief"]
+    # When the card's facts were read; the client compares Board reads against it.
+    assert brief["cards"][0].pop("facts_at") > 0
+    assert brief["count_line"] == "Waiting on you: 1"
+    assert brief["cards"] == [
+        {
+            "kind": "item",
+            "item_id": "it_00000001",
+            "title": "Add the panel",
+            "tags": [{"text": "has a question", "bad": False}],
+        }
     ]
-    assert result["meta"]["brief"]["waiting_total"] == 1
+    assert brief["board"]["text"] == "Board: 1 waiting on you"
 
     # Leave and come back again with nothing changed: the claim holds, no spend.
     await _hide_for(state, 1, slot.key, 45 * 60)

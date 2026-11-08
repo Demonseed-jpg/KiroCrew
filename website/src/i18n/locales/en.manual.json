@@ -1644,6 +1644,15 @@
     }
   },
   "components": {
+    "crewPrFacts": {
+      "read": "read {{time}}",
+      "conductor_said": "Conductor wrote at {{time}}",
+      "conductor_pick": "Conductor's pick",
+      "checker": "checker {{time}}: {{verdict}}",
+      "verdict_pass": "checks passed",
+      "verdict_fail": "checks failed",
+      "verdict_pending": "not done yet"
+    },
     "mateWorkers": {
       "approvals_label": "Tool approvals from this bot's sessions: {{n}}",
       "trust": "Trust this session",
@@ -1665,6 +1674,7 @@
       "checks_unknown": "{{n}} unknown",
       "done": "Done so far",
       "label": "Catch-up",
+      "tags": "State",
       "more_waiting": "{{count}} more",
       "needs_you": "Needs you",
       "next": "Next",

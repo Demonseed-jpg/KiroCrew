@@ -6276,6 +6276,15 @@
     "viewPr": "Пул-реквест"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "прочитано в {{time}}",
+      "conductor_said": "Координатор в {{time}}",
+      "conductor_pick": "Совет координатора",
+      "checker": "проверка {{time}}: {{verdict}}",
+      "verdict_pass": "проверки прошли",
+      "verdict_fail": "проверки не прошли",
+      "verdict_pending": "ещё не готово"
+    },
     "dataHomeOwnerNotice": {
       "cause": "Скорее всего, {{productName}} однажды запустили от root, например через sudo. Больше не запускай его от root, а потом верни файлы своей учётной записи.",
       "check_failed": "Не удалось проверить, кому принадлежат файлы {{productName}}.",
@@ -6304,6 +6313,7 @@
       "checks_unknown": "неизвестно: {{n}}",
       "done": "Сделано",
       "label": "Сводка",
+      "tags": "Состояние",
       "more_waiting": "Ещё {{count}}",
       "needs_you": "Нужно от тебя",
       "next": "Дальше",

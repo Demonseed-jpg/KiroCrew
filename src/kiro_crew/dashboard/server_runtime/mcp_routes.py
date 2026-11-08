@@ -184,6 +184,10 @@ def _register_mcp_routes(app: web.Application) -> None:
     app.router.add_post(
         "/api/work-ledger/rebuild", _deferred_work_ledger("api_work_ledger_rebuild")
     )
+    # The accept_eval tool's pull-request verdicts, recorded as object/observed.
+    app.router.add_post(
+        "/api/work-ledger/observed", _deferred("work_ledger_observed", "api_work_observed")
+    )
     # Mediated-secret egress (kirocrew-secrets MCP tool). Both are MCP-only, loopback
     # + gateway-IPC-secret callers — no browser posts to them (they are in
     # ``_STRICT_INTERNAL_API_PATHS``). The capability endpoint redeems the single-use

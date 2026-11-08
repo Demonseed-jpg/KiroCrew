@@ -7,7 +7,7 @@
  * their props captured.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act, fireEvent } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { forwardRef, type ReactNode } from 'react'
 
 const seen = vi.hoisted(() => ({
@@ -293,13 +293,13 @@ describe('ChatTranscriptView', () => {
     expect(seen.toolGroups).toHaveLength(0)
   })
 
-  it("names what the warm catch-up checks while the gateway prepares it, and nothing once it is done", () => {
+  it("names what the warm catch-up checks inside a reply bubble while the gateway prepares it, and nothing once it is done", async () => {
     const caption = 'Checking 2 PRs on GitHub for “Ship the fix”.'
     const slot = (preparing: boolean) => ({ key: 'crew-a', messages: 1, running: false, preparing, preparing_text: preparing ? caption : '', preparing_lang: preparing ? 'en' : '' }) as never
     const { rerender } = render(<ChatTranscriptView {...base([], { currentSlot: slot(true) })} />)
-    expect(screen.getByTestId('chat-preparing-catch-up')).toHaveTextContent(caption)
+    expect(screen.getByTestId('chat-preparing-catch-up').querySelector('.message-bubble')).toHaveTextContent(caption)
     rerender(<ChatTranscriptView {...base([], { currentSlot: slot(false) })} />)
-    expect(screen.queryByTestId('chat-preparing-catch-up')).toBeNull()
+    await waitFor(() => expect(screen.queryByTestId('chat-preparing-catch-up')).toBeNull())
   })
 
   it('routes a group approval to the newest unresolved permission, else to the page approve', async () => {

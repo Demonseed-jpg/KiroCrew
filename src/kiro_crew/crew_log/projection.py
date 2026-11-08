@@ -74,6 +74,7 @@ citation to follow.
 #   ``projection_work`` -- the ``work`` slot fold and the units a board spans
 #   ``projection_workstreams`` -- the ``workstreams`` slot fold and its board closure
 #   ``projection_worktree`` -- the ``worktree`` tree fold
+#   ``projection_objects`` -- the ``objects`` slot fold (what code last read about an outside object)
 #   ``projection_registry`` -- ``_FOLDS`` and what each fold touches, copies and retains
 #   ``projection_kernel`` -- ``Checkpoint`` and the pure fold API over the registry
 #   ``projection_budget`` -- the warm memo's byte budget: measured row costs and the ceiling
@@ -110,6 +111,7 @@ _OWNERS = (
     "kiro_crew.crew_log.projection_workers",
     "kiro_crew.crew_log.projection_workstreams",
     "kiro_crew.crew_log.projection_worktree",
+    "kiro_crew.crew_log.projection_objects",
     "kiro_crew.crew_log.projection_registry",
     "kiro_crew.crew_log.projection_kernel",
     "kiro_crew.crew_log.projection_budget",
@@ -747,6 +749,8 @@ if TYPE_CHECKING:  # names it serves from outside the fold family, from their ho
         MISTAKE_CORRECTION_LIMIT,
         MISTAKE_GROUP_LIMIT,
         MISTAKES_FOLD_NAME,
+        OBJECT_PRODUCERS,
+        OBJECTS_FOLD_NAME,
         PANEL_CREW_KEY_LIMIT,
         PANEL_ENTRY_TYPE,
         PANEL_FOLD_NAME,

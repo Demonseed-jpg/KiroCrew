@@ -5940,6 +5940,15 @@
     "viewPr": "Pull Request"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "gelesen {{time}}",
+      "conductor_said": "Koordinator um {{time}}",
+      "conductor_pick": "Empfehlung des Koordinators",
+      "checker": "Prüfer {{time}}: {{verdict}}",
+      "verdict_pass": "Prüfungen bestanden",
+      "verdict_fail": "Prüfungen fehlgeschlagen",
+      "verdict_pending": "noch nicht fertig"
+    },
     "dataHomeOwnerNotice": {
       "cause": "{{productName}} wurde wahrscheinlich einmal als root gestartet, zum Beispiel mit sudo. Starte es nicht mehr als root und gib die Dateien danach deinem eigenen Konto zurück.",
       "check_failed": "Konnte nicht prüfen, wem die {{productName}}-Dateien gehören.",
@@ -5968,6 +5977,7 @@
       "checks_unknown": "{{n}} unbekannt",
       "done": "Erledigt",
       "label": "Zwischenstand",
+      "tags": "Status",
       "more_waiting": "{{count}} weitere",
       "needs_you": "Braucht dich",
       "next": "Als Nächstes",

@@ -1458,6 +1458,9 @@ _PERMITTED_STORE_IMPORTERS = frozenset(
         "dashboard/handlers/work_ledger_caller.py",
         "dashboard/handlers/work_ledger_conductor.py",
         "dashboard/handlers/work_ledger_handback.py",
+        # The accept_eval verdict route: an MCP-only work-ledger route like its
+        # siblings; it only asks whether the server-resolved caller holds a ledger.
+        "dashboard/handlers/work_ledger_observed.py",
         "dashboard/handlers/work_ledger_read.py",
         "dashboard/handlers/work_ledger_recording.py",
         "dashboard/handlers/work_ledger_refusals.py",

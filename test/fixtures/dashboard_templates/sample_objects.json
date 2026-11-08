@@ -1,0 +1,39 @@
+{
+  "note": "One conductor's objects fold, as the fold renders it: a pull request the warm welcome read and the accept_eval tool judged. Written by running the fold's own step over two object/observed entries, not captured: the pod capture predates this fold.",
+  "now": "2026-11-07T19:30:00Z",
+  "folds": {
+    "objects": {
+      "seq": 2,
+      "value": {
+        "latest": {
+          "https://github.com/kirodotdev/KiroCrew/pull/30767": {
+            "warm_brief": {
+              "kind": "github_pull_request",
+              "facts": {
+                "state": "open",
+                "review": "REVIEW_REQUIRED",
+                "mergeable": "conflicting",
+                "checks": {
+                  "failed": 6,
+                  "pending": 0,
+                  "passed": 80,
+                  "unknown": 0
+                }
+              },
+              "observed_at": 1762543320.0
+            },
+            "accept_eval": {
+              "kind": "github_pull_request",
+              "facts": {
+                "accept": "pr_checks",
+                "verdict": "fail"
+              },
+              "observed_at": 1762543500.0
+            }
+          }
+        },
+        "omitted": 0
+      }
+    }
+  }
+}

@@ -399,13 +399,17 @@ class PrRef:
 
 
 def ledger_ref(item: Mapping[str, Any]) -> PrRef | None:
-    """The pull request a work item holds in ledger data: its ``pr`` (or its
-    acceptance's ``pr``) in its acceptance's ``repo``. ``None`` without both."""
+    """THE key for which pull request a work item holds: its acceptance's ``pr``,
+    else its own ``pr``, in its acceptance's ``repo``. ``None`` without both. The
+    welcome, the Ultra Mode Board (``pr_facts``) and goal-board (the ``pr_url`` that
+    ``with_worker_facts`` stamps) all call this; no surface keeps its own rule."""
     acceptance = item.get("acceptance")
     if not isinstance(acceptance, Mapping):
         return None
     repo = acceptance.get("repo")
-    number = item.get("pr") if isinstance(item.get("pr"), int) else acceptance.get("pr")
+    accepted = acceptance.get("pr")
+    own = item.get("pr")
+    number = accepted if isinstance(accepted, int) and not isinstance(accepted, bool) else own
     if not (isinstance(repo, str) and _REPO_RE.match(repo)):
         return None
     if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
@@ -510,11 +514,16 @@ _live_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 async def read_live_prs(
-    refs: Sequence[PrRef], now: float | None = None, budget: float = LIVE_READ_TOTAL_SECS
+    refs: Sequence[PrRef],
+    now: float | None = None,
+    budget: float = LIVE_READ_TOTAL_SECS,
+    unit: str = "",
 ) -> list[dict[str, Any]]:
     """One entry per ref: its live state and read time, or ``checked: false``
     with the time of the last good read. The GitHub read gets *budget*
-    seconds; past it every PR it was reading is not checked. Never raises."""
+    seconds; past it every PR it was reading is not checked. With *unit* (the
+    thread's crew log unit), each good read is also recorded there
+    (:func:`_observe`). Never raises."""
     now = time.time() if now is None else now
     stale = [
         ref.url
@@ -555,7 +564,56 @@ async def read_live_prs(
             entry["read_at"] = clock(cached[0])
             entry["_read_epoch"] = cached[0]
         entries.append({k: v for k, v in entry.items() if v is not None})
+    if unit:
+        await _observe(unit, entries)
     return entries
+
+
+# (unit, url, read epoch) already recorded, so a cached read is written once per unit.
+_observed: dict[tuple[str, str, float], None] = {}
+
+
+async def _observe(unit: str, entries: Sequence[Mapping[str, Any]]) -> None:
+    """Record each good read in *entries* as ``object/observed`` (producer
+    ``warm_brief``) in crew log *unit*, once per read, so the ``objects`` slot fold
+    serves it to the Board with its read time. No extra GitHub call. Never raises."""
+    import hashlib
+
+    fresh: list[tuple[str, dict[str, Any], float]] = []
+    for entry in entries:
+        epoch, url = entry.get("_read_epoch"), entry.get("url")
+        if entry.get("checked") is not True or not isinstance(epoch, float) or not url:
+            continue
+        if (unit, str(url), epoch) in _observed:
+            continue
+        _observed[(unit, str(url), epoch)] = None
+        facts = {k: entry[k] for k in ("state", "review", "mergeable", "checks") if k in entry}
+        fresh.append((str(url), facts, epoch))
+    while len(_observed) > _MAX_LIVE_CACHE * 4:
+        _observed.pop(next(iter(_observed)))
+    if not fresh:
+        return
+
+    def write() -> None:
+        from kiro_crew.crew_log import emit as crew_log_emit
+        from kiro_crew.crew_log.entry_types import OBJECT_PRODUCER_WARM_BRIEF
+
+        for url, facts, epoch in fresh:
+            blob = json.dumps(facts, sort_keys=True, default=str).encode("utf-8")
+            crew_log_emit.on_object_observed(
+                unit,
+                producer=OBJECT_PRODUCER_WARM_BRIEF,
+                kind="github_pull_request",
+                target=url,
+                fingerprint=hashlib.sha256(blob).hexdigest()[:16],
+                facts=facts,
+                observed_at=epoch,
+            )
+
+    try:
+        await asyncio.to_thread(write)
+    except Exception:
+        logger.debug("warm task brief could not record its PR reads", exc_info=True)
 
 
 def public_live(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

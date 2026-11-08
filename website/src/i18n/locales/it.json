@@ -6108,6 +6108,15 @@
     "viewPr": "Pull request"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "letto alle {{time}}",
+      "conductor_said": "Coordinatore alle {{time}}",
+      "conductor_pick": "Scelta del coordinatore",
+      "checker": "verificatore {{time}}: {{verdict}}",
+      "verdict_pass": "controlli superati",
+      "verdict_fail": "controlli falliti",
+      "verdict_pending": "non ancora finito"
+    },
     "dataHomeOwnerNotice": {
       "cause": "Probabilmente {{productName}} è stato avviato una volta come root, per esempio con sudo. Smetti di eseguirlo come root, poi restituisci i file al tuo account.",
       "check_failed": "Impossibile controllare a chi appartengono i file di {{productName}}.",
@@ -6136,6 +6145,7 @@
       "checks_unknown": "{{n}} sconosciuti",
       "done": "Fatto",
       "label": "Riepilogo",
+      "tags": "Stato",
       "more_waiting": "Altre {{count}}",
       "needs_you": "Serve a te",
       "next": "Prossimi passi",

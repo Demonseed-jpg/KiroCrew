@@ -124,6 +124,7 @@ _REPORT_PATH = "/api/work-ledger/report"
 _READ_PATH = "/api/work-ledger"
 _RECORD_PATH = "/api/work-ledger/record"
 _REBUILD_PATH = "/api/work-ledger/rebuild"
+_OBSERVED_PATH = "/api/work-ledger/observed"
 
 #: Fields ``work_ledger_record`` forwards. The action selects which of them it
 #: REQUIRES; a field an action has no use for is generally IGNORED rather than
@@ -829,7 +830,49 @@ def _screen_file_item(item: Any) -> tuple[Any, dict[str, str] | None]:
     return {**item, "accept": {**accept, "path": canonical}}, None
 
 
-def _accept_eval(args: dict[str, Any]) -> str:
+#: The verdicts the gateway records as observations; the route re-checks each.
+_OBSERVED_KINDS = ("pr_checks", "pr_merged")
+_OBSERVED_VERDICTS = ("pass", "fail", "pending")
+
+
+def _pr_verdicts(items: list[Any], results: list[Any]) -> list[dict[str, Any]]:
+    """Each ``pr_checks`` / ``pr_merged`` verdict with the repo and PR it was read for.
+
+    Paired by position (the evaluator answers in order) and checked by id, so a
+    result never lands on another item's pull request."""
+    rows: list[dict[str, Any]] = []
+    for item, result in zip(items, results):
+        accept = item.get("accept") if isinstance(item, dict) else None
+        if not isinstance(accept, dict) or not isinstance(result, dict):
+            continue
+        if str(item.get("id", "")) != str(result.get("id", "")):
+            continue
+        if accept.get("kind") in _OBSERVED_KINDS and result.get("verdict") in _OBSERVED_VERDICTS:
+            rows.append(
+                {
+                    "repo": accept.get("repo"),
+                    "pr": accept.get("pr"),
+                    "kind": accept.get("kind"),
+                    "verdict": result.get("verdict"),
+                }
+            )
+    return rows
+
+
+def _record_verdicts(items: list[Any], results: list[Any], caller_key: str) -> None:
+    """Hand the pull-request verdicts to the gateway, which records them as
+    ``object/observed`` for the Board. Best effort: a refused or failed post never
+    changes the tool's answer."""
+    rows = _pr_verdicts(items, results)
+    if not rows or not caller_key:
+        return
+    try:
+        _post(_OBSERVED_PATH, {"observed": rows}, session_key=caller_key)
+    except Exception:
+        logger.debug("accept_eval verdicts were not recorded", exc_info=True)
+
+
+def _accept_eval(args: dict[str, Any], caller_key: str = "") -> str:
     screened = [_screen_file_item(item) for item in args["items"]]
     document, code = _skill_script("accept_eval").evaluate_document(
         {"items": [item for item, refused in screened if refused is None]}
@@ -841,6 +884,7 @@ def _accept_eval(args: dict[str, Any]) -> str:
                 refused if refused is not None else next(evaluated) for _, refused in screened
             ]
         }
+        _record_verdicts(list(args["items"]), document["results"], caller_key)
     # Evidence quotes gh / edition output, so it is redacted like every reply here.
     return redact(json.dumps(document, indent=2, ensure_ascii=False))
 
@@ -934,7 +978,7 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
             return _refusal(f"{name} runs only for a session that holds a work ledger", resp)
 
     if name == "accept_eval":
-        return _accept_eval(args)
+        return _accept_eval(args, caller_key)
 
     if name == "patrol_budget":
         return _patrol_budget(args)

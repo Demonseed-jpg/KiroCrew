@@ -5940,6 +5940,15 @@
     "viewPr": "पुल रिक्वेस्ट"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "{{time}} पर पढ़ा",
+      "conductor_said": "संचालक {{time}} पर",
+      "conductor_pick": "संचालक का सुझाव",
+      "checker": "जाँचकर्ता {{time}}: {{verdict}}",
+      "verdict_pass": "जाँच पास",
+      "verdict_fail": "जाँच विफल",
+      "verdict_pending": "अभी पूरा नहीं"
+    },
     "dataHomeOwnerNotice": {
       "cause": "शायद {{productName}} को एक बार root के रूप में चलाया गया था, जैसे sudo से। इसे root के रूप में चलाना बंद करो, फिर फ़ाइलें अपने खाते को वापस दो।",
       "check_failed": "{{productName}} की फ़ाइलें किसकी हैं, यह जाँचा नहीं जा सका।",
@@ -5968,6 +5977,7 @@
       "checks_unknown": "{{n}} अज्ञात",
       "done": "हो चुका",
       "label": "सारांश",
+      "tags": "स्थिति",
       "more_waiting": "{{count}} और",
       "needs_you": "तुमसे चाहिए",
       "next": "आगे",
