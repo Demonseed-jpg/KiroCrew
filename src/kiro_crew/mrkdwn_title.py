@@ -37,7 +37,7 @@ Standard library only at import time: the session catalog imports it.
 
 from __future__ import annotations
 
-import re
+from collections.abc import Iterator
 from urllib.parse import urlsplit
 
 __all__ = [
@@ -52,11 +52,12 @@ __all__ = [
 #: thread into a dashboard tab (``!link-to-dashboard``). Host-written only.
 SLACK_TEXT_META_KEY = "slackText"
 
-#: A closed ``<…>`` construct, and one a truncation cut open at the very end.
-_CLOSED = re.compile(r"<([^<>\n]*)>")
-_OPEN_TAIL = re.compile(r"<([^<>\n]*)$")
-_URL_SCHEME = re.compile(r"^(?:https?|ftp)://", re.IGNORECASE)
-_GITHUB_REF = re.compile(r"^/([^/]+)/([^/]+)/(?:issues|pull|pulls)/(\d+)(?:[/?#].*)?$")
+#: Characters a ``<…>`` construct's body may not hold: it is one line, unnested.
+_NOT_IN_BODY = "<>\n"
+#: URL schemes Slack links, compared case-insensitively.
+_URL_SCHEMES = ("http://", "https://", "ftp://")
+#: GitHub path kinds that name an issue or a pull request.
+_GITHUB_REF_KINDS = ("issues", "pull", "pulls")
 _BROADCASTS = frozenset({"here", "channel", "everyone"})
 #: Path segments kept in the short form of a non-GitHub URL.
 _SHORT_PATH_SEGMENTS = 2
@@ -68,9 +69,66 @@ _ECHO_MIN_CHARS = 8
 _MAX_PASSES = 4
 #: The three escapes Slack applies. ``&amp;`` that would decode into the start of
 #: another escape is kept, so a decoded ``&`` never begins one on the next pass.
-_ENTITY = re.compile(r"&(?:lt|gt|amp);")
-_AMP_GUARD = re.compile(r"&amp;(?=(?:lt|gt|amp);)")
 _DECODED = {"&lt;": "<", "&gt;": ">", "&amp;": "&"}
+#: What follows ``&`` in an escape, the tails an ``&amp;`` guard looks for.
+_ENTITY_TAILS = ("lt;", "gt;", "amp;")
+
+
+def _has_url_scheme(url: str) -> bool:
+    return url.lower().startswith(_URL_SCHEMES)
+
+
+def _without_scheme(url: str) -> str:
+    low = url.lower()
+    for scheme in _URL_SCHEMES:
+        if low.startswith(scheme):
+            return url[len(scheme) :]
+    return url
+
+
+def _github_ref(path: str) -> str | None:
+    """``owner/repo#N`` for ``/owner/repo/(issues|pull|pulls)/N[/…]``, else None."""
+    segs = path.split("/")
+    if len(segs) < 5 or segs[0] or not segs[1] or not segs[2]:
+        return None
+    if segs[3] not in _GITHUB_REF_KINDS or not segs[4].isdecimal():
+        return None
+    return f"{segs[1]}/{segs[2]}#{segs[4]}"
+
+
+def _closed_constructs(text: str) -> Iterator[tuple[int, int, str]]:
+    """``(start, end, body)`` of each closed ``<body>``, left to right, unnested."""
+    i, n = 0, len(text)
+    while (start := text.find("<", i)) >= 0:
+        j = start + 1
+        while j < n and text[j] not in _NOT_IN_BODY:
+            j += 1
+        if j < n and text[j] == ">":
+            yield start, j + 1, text[start + 1 : j]
+            i = j + 1
+        else:
+            i = start + 1
+
+
+def _open_tail(text: str) -> int:
+    """Where a ``<`` that a cut left open at the very end starts, or -1."""
+    start = text.rfind("<")
+    if start < 0 or any(c in text[start + 1 :] for c in _NOT_IN_BODY):
+        return -1
+    return start
+
+
+def _entities(text: str) -> Iterator[tuple[int, str]]:
+    """``(start, escape)`` of each ``&lt;``/``&gt;``/``&amp;``, left to right."""
+    i = 0
+    while (start := text.find("&", i)) >= 0:
+        for escape in _DECODED:
+            if text.startswith(escape, start):
+                yield start, escape
+                i = start + len(escape)
+                break
+        else:
+            i = start + 1
 
 
 def is_slack_session_key(key: str) -> bool:
@@ -107,9 +165,9 @@ def _short_url(url: str, *, cut: bool = False) -> str:
     if not host:
         return url
     if host == "github.com" and not cut:
-        ref = _GITHUB_REF.match(parts.path)
+        ref = _github_ref(parts.path)
         if ref:
-            return f"{ref.group(1)}/{ref.group(2)}#{ref.group(3)}"
+            return ref
     segments = [s for s in parts.path.split("/") if s]
     short = "/".join([host, *segments[:_SHORT_PATH_SEGMENTS]])
     if cut or len(segments) > _SHORT_PATH_SEGMENTS:
@@ -121,7 +179,7 @@ def _label_echoes_url(label: str, url: str, *, cut: bool) -> bool:
     """Whether *label* is the URL itself (Slack's auto-link): whole, or cut off when *cut*."""
     if not label:
         return True
-    bare = _URL_SCHEME.sub("", url)
+    bare = _without_scheme(url)
     if cut:
         # A title an earlier build cut already ends its label with "…".
         label = label.removesuffix("…")
@@ -149,7 +207,7 @@ def _read(body: str, *, cut: bool = False) -> str | None:
         return None
     if target.lower().startswith("mailto:"):
         return label or target[len("mailto:") :]
-    if _URL_SCHEME.match(target):
+    if _has_url_scheme(target):
         if has_label and not _label_echoes_url(label, target, cut=cut):
             return f"{label.removesuffix('…')}…" if cut else label
         # Cut inside the target itself (no label yet): the URL is partial.
@@ -158,16 +216,20 @@ def _read(body: str, *, cut: bool = False) -> str | None:
 
 
 def _read_constructs(text: str) -> str:
-    def _closed(m: re.Match[str]) -> str:
-        read = _read(m.group(1))
-        return m.group(0) if read is None else read
-
-    out = _CLOSED.sub(_closed, text)
-    tail = _OPEN_TAIL.search(out)
-    if tail:
-        read = _read(tail.group(1), cut=True)
+    pieces: list[str] = []
+    cursor = 0
+    for start, end, body in _closed_constructs(text):
+        read = _read(body)
+        pieces.append(text[cursor:start])
+        pieces.append(text[start:end] if read is None else read)
+        cursor = end
+    pieces.append(text[cursor:])
+    out = "".join(pieces)
+    tail = _open_tail(out)
+    if tail >= 0:
+        read = _read(out[tail + 1 :], cut=True)
         if read is not None:
-            out = out[: tail.start()] + read
+            out = out[:tail] + read
     return out
 
 
@@ -175,14 +237,13 @@ def _decode(text: str, *, angles: bool) -> str:
     """Decode the escapes; ``&lt;``/``&gt;`` only when *angles*, guarded ``&amp;`` never."""
     pieces: list[str] = []
     cursor = 0
-    for m in _ENTITY.finditer(text):
-        entity = m.group(0)
+    for start, entity in _entities(text):
         keep = (entity != "&amp;" and not angles) or (
-            entity == "&amp;" and _AMP_GUARD.match(text, m.start()) is not None
+            entity == "&amp;" and text.startswith(_ENTITY_TAILS, start + len("&amp;"))
         )
-        pieces.append(text[cursor : m.start()])
+        pieces.append(text[cursor:start])
         pieces.append(entity if keep else _DECODED[entity])
-        cursor = m.end()
+        cursor = start + len(entity)
     pieces.append(text[cursor:])
     return "".join(pieces)
 
