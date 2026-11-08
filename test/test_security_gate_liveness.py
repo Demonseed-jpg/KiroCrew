@@ -724,7 +724,11 @@ def _url_payload_command(n: int) -> str:
 #: shares it; the dashboard copy was deleted. Re-measured.
 #: Raised by 4, from 35,036, for the Bearer branch's ``bearer_prefix`` group and pass
 #: 1's value-only span. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_040
+#: Raised by 56, from 35,040, for ``argv_floor_ssh``: a glob program word is walked
+#: once per ssh-family verb it can name (``_ssh_family_verbs``, ``_frame_verb_choices``),
+#: and ``_shares_nested_verdicts`` judges each nested payload once per outer call so
+#: those walks do not multiply. Nothing is relaxed. Re-measured.
+_PACKAGE_LINE_BUDGET = 35_096
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
