@@ -25,7 +25,14 @@ import {
 import { useIsNarrowViewport } from '../../hooks/useIsMobile'
 import { fmtNumber } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
-import { detailsWhyKey, DOCS_URL, gibNumber, type LaunchRefusal } from './mcpManagementModel'
+import {
+  type CurrentLaunch,
+  detailsWhyKey,
+  DOCS_URL,
+  gibNumber,
+  type LaunchRefusal,
+  withCurrentLaunch,
+} from './mcpManagementModel'
 import { RefusalLaunch, SHARE_BUTTON_CLASS } from './McpManagementLaunchReview'
 import { useMcpHandoffHint, useMcpHandoffWouldLoseEdits } from '../connections/mcpStagedEditsContext'
 
@@ -298,14 +305,17 @@ type ReviewState = { kind: 'pending' | 'approving' | 'approved' | 'skipped'; err
  * "Approved") instead of vanishing when the status read moves on. Approve
  * pins the launch shown in the block (`refusal.expected_launch` as it was
  * when the dialog opened); a launch that changed underneath is refused by the
- * endpoint, and that refusal is shown in the block. Skip writes nothing. When
- * every block is handled the dialog closes itself.
+ * endpoint, and that refusal is shown in the block. When the refusal itself
+ * was moved past, the block shows and pins the launch the endpoint sent back
+ * (`currentLaunches`) from then on. Skip writes nothing. When every block is
+ * handled the dialog closes itself.
  */
 export function ReviewApprovalsDialog({
   open,
   items,
   supported,
   returnFocusTo,
+  currentLaunches = {},
   onApprove,
   onClose,
 }: {
@@ -314,8 +324,13 @@ export function ReviewApprovalsDialog({
   supported: boolean
   /** Where focus goes when the dialog closes: the button that opened it. */
   returnFocusTo?: HTMLElement | null
-  /** The table button's own write; resolves with an error line, or null. */
-  onApprove: (name: string, expectedLaunch: string) => Promise<string | null>
+  /** Per server, the launch that stands in for a moved-past refusal. */
+  currentLaunches?: Readonly<Record<string, CurrentLaunch>>
+  /**
+   * The table button's own write, given the launch pinned and the refusal's
+   * own `expected_launch`; resolves with an error line, or null.
+   */
+  onApprove: (name: string, expectedLaunch: string, refused?: string) => Promise<string | null>
   onClose: () => void
 }) {
   const handoffWouldLoseEdits = useMcpHandoffWouldLoseEdits()
@@ -356,8 +371,9 @@ export function ReviewApprovalsDialog({
 
   const approve = async (item: ReviewItem) => {
     const name = item.server.name
+    const shown = withCurrentLaunch(item.refusal, currentLaunches[name])
     setStates(s => ({ ...s, [name]: { kind: 'approving' } }))
-    const error = await onApprove(name, item.refusal.expected_launch as string)
+    const error = await onApprove(name, shown.expected_launch as string, item.refusal.expected_launch)
     settle(name, error ? { kind: 'pending', error } : { kind: 'approved' })
   }
 
@@ -400,7 +416,8 @@ export function ReviewApprovalsDialog({
             {i18nT('pages.mcpManagement.review_when_safe')}
           </DialogDescription>
           {items.map(item => {
-            const { server, refusal } = item
+            const { server } = item
+            const refusal = withCurrentLaunch(item.refusal, currentLaunches[server.name])
             const st = stateOf(server.name)
             const handled = st.kind === 'approved' || st.kind === 'skipped'
             const nameId = `mcp-review-name-${server.name}`

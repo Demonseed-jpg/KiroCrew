@@ -82,9 +82,46 @@ function errorCode(error: unknown): unknown {
   }
 }
 
+/**
+ * The launch a server resolves to now, which the gateway sent back when an
+ * approve pinned a refusal the launch had moved past, beside the stored
+ * refusal's `expected_launch` it stands in for.
+ */
+export type CurrentLaunch = { refused: string; launch: LaunchPreview }
+
+/**
+ * The launch a `launch_display_stale` refusal carries, else undefined.
+ *
+ * Only a gateway start rewrites a stored refusal, so the page cannot read the
+ * moved launch from the status route: it shows and pins this one instead.
+ */
+export function staleDisplayLaunch(error: unknown): LaunchPreview | undefined {
+  if (!(error instanceof ApiError)) return undefined
+  try {
+    const body = JSON.parse(error.body)
+    const launch = body?.code === 'launch_display_stale' ? body.launch : undefined
+    return launch && Array.isArray(launch.commands) && Array.isArray(launch.envs) ? (launch as LaunchPreview) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * *refusal* as the page shows and approves it: with the launch the gateway
+ * sent back in place of its own, while that launch still stands in for this
+ * refusal (a gateway start that rewrote the refusal makes it moot).
+ */
+export function withCurrentLaunch(refusal: LaunchRefusal, current?: CurrentLaunch): LaunchRefusal {
+  if (!current || current.refused !== refusal.expected_launch) return refusal
+  const { commands, envs, complete, expected_launch } = current.launch
+  return { ...refusal, commands, envs, complete, expected_launch }
+}
+
 export function stubErrorKey(error: unknown): string {
   const code = errorCode(error)
   if (code === 'launch_changed_since_display') return 'pages.mcpManagement.stub_error_launch_changed'
+  // The refusal shown is older than the launch now; the page shows that one.
+  if (code === 'launch_display_stale') return 'pages.mcpManagement.stub_error_launch_display_stale'
   // Sending stub=true without the identity of a launch that was read.
   if (code === 'expected_launch_required') return 'pages.mcpManagement.stub_error_expected_launch_required'
   if (code === 'launch_display_incomplete') return 'pages.mcpManagement.stub_error_launch_display_incomplete'

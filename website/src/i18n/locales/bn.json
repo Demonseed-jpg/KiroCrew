@@ -16243,6 +16243,7 @@
       "stub_error_launch_display_incomplete": "কিছুই অনুমোদিত হয়নি: {{name}} যে কমান্ড চালাবে তা এত লম্বা যে পুরোটা দেখানো যায় না।",
       "stub_error_batch_stub_requires_individual": "কিছুই অনুমোদিত হয়নি: প্রতিটি সার্ভারকে তার নিজের কমান্ড থেকেই অনুমোদন করতে হয়।",
       "stub_error_launch_changed": "{{name}}: পড়ার পরে এর কমান্ড বদলে গেছে, তাই কিছুই অনুমোদিত হয়নি। আবার চেষ্টা করো।",
+      "stub_error_launch_display_stale": "{{name}}: দেখানোর পরে এর কমান্ড আবার বদলে গেছে, তাই কিছুই অনুমোদিত হয়নি। এখন দেখানো কমান্ডটি দেখে নাও, তারপর সেটি অনুমোদন করো।",
       "reapproval_reason_added_outside_dashboard_unapprovable": "একটি কনফিগ ফাইলে ঘোষণা করা আছে, এখানে কখনো অনুমোদিত হয়নি।",
       "state_not_approved_yet": "থামানো · এখনও অনুমোদিত নয়",
       "confirm_title": "শেয়ারিং চালু করবে?",
