@@ -5358,6 +5358,7 @@
         "mute_channel": "Mute channel",
         "mute_failed": "Couldn't mute this channel. Try again.",
         "muted_2": "muted",
+        "updated": "updated",
         "no_notifications": "No notifications",
         "press_again_to_clear": "Press again to clear",
         "reject": "Reject",

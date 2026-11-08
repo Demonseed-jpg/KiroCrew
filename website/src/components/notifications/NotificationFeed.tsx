@@ -761,6 +761,15 @@ export default function NotificationFeed({ selectedTs, onSelect, variant = 'pane
                 // row's close X, its only way out.
                 const rowDim = (n.acked || settled || prio === 'passive') && !active && !silenced ? 'opacity-50' : ''
                 const collapsedStack = !!(stackKey && stackCount && stackCount > 1 && !stackExpanded)
+                // A keyed note that took an earlier note's place says so, so a
+                // reader who saw the old row does not take it for a new note.
+                const updated = !!n.replaced && !silenced
+                const updatedLabel = updated ? (
+                  <span className="text-[10px] text-muted italic">{i18nT('components.notifications.notificationFeed.updated')}</span>
+                ) : null
+                const openRowLabel = updated
+                  ? i18nT('components.notifications.notificationFeed.open_updated_notification', { title })
+                  : i18nT('components.notifications.notificationFeed.open_notification', { title })
                 const actionBtn = MAC_ACTION_BTN_CLASS
                 // The mac row IS the shared card (one rendering with the
                 // banner); the feed adds only what it owns — the reveal anchor,
@@ -854,7 +863,7 @@ export default function NotificationFeed({ selectedTs, onSelect, variant = 'pane
                         onOpen={() => { if (collapsedStack && stackKey) toggleStack(stackKey); else onSelect(n) }}
                         openLabel={collapsedStack
                           ? i18nT('components.notifications.notificationFeed.expand_grouped_notifications', { count: stackCount, title })
-                          : i18nT('components.notifications.notificationFeed.open_notification', { title })}
+                          : openRowLabel}
                         onDismiss={dismissRow}
                         dismissLabel={dismissLabel}
                         actions={macActions}
@@ -863,8 +872,11 @@ export default function NotificationFeed({ selectedTs, onSelect, variant = 'pane
                         trailing={silenced ? (
                           <span className="text-[10px] text-muted italic flex items-center gap-1"><BellOff className="lucide-inline" /> {i18nT('components.notifications.notificationFeed.muted_2')}</span>
                         ) : collapsedStack ? (
-                          <span className="text-[10px] font-medium text-muted px-1.5 py-px rounded-full bg-[color-mix(in_srgb,var(--bg-hover)_80%,transparent)]">{stackCount}</span>
-                        ) : undefined}
+                          <>
+                            {updatedLabel}
+                            <span className="text-[10px] font-medium text-muted px-1.5 py-px rounded-full bg-[color-mix(in_srgb,var(--bg-hover)_80%,transparent)]">{stackCount}</span>
+                          </>
+                        ) : updatedLabel ?? undefined}
                       />
                     ) : (
                     <div data-notif-row data-ts={n.ts}
@@ -873,7 +885,7 @@ export default function NotificationFeed({ selectedTs, onSelect, variant = 'pane
                       <div className="flex items-center gap-2.5">
                       <Clickable
                         onClick={() => onSelect(n)}
-                        aria-label={i18nT('components.notifications.notificationFeed.open_notification', { title })}
+                        aria-label={openRowLabel}
                         className={`flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer ${rowDim}`}
                       >
                         {member ? <CrewmateNoteFace member={member} size={18} fallback={kindIcon} /> : kindIcon}
@@ -886,6 +898,7 @@ export default function NotificationFeed({ selectedTs, onSelect, variant = 'pane
                         </div>
                         <div className="flex flex-col items-end gap-0.5 shrink-0">
                           <span className="text-[11px] text-muted font-mono">{fmtTime(n.ts)}</span>
+                          {updatedLabel}
                           {silenced ? (
                             <span className="text-[10px] text-muted italic flex items-center gap-1"><BellOff className="lucide-inline" /> {i18nT('components.notifications.notificationFeed.muted_2')}</span>
                           ) : !n.acked && !settled ? (
