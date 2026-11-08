@@ -19,9 +19,10 @@ import re
 import shutil
 import stat as _stat
 import tarfile
+import zlib
 from collections.abc import Iterator
 from contextlib import ExitStack, closing, contextmanager
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 from kiro_crew import pinned_fs, platform_compat
@@ -729,6 +730,11 @@ def _report_skip(reason: str, path: str) -> None:
         print(f"⚠️  Skipping vanished entry during snapshot copy: {safe}")
     elif reason == pinned_fs.SKIP_UNREADABLE_ENTRY:
         print(f"⚠️  Skipping entry this process may not read: {safe}")
+    elif reason == pinned_fs.SKIP_MASKED_BY_SANDBOX:
+        print(
+            f"⚠️  Not carrying {safe}: this run is inside Kiro Crew's sandbox, which hides "
+            "it. A `kirocrew snapshot` run from your own terminal carries it."
+        )
     else:
         print(f"⚠️  Skipping hardlinked or non-regular file during snapshot copy: {safe}")
 
@@ -1099,6 +1105,97 @@ def _manifest_components(snap: Path) -> list[str] | None:
             + ", ".join(_safe_name(d) for d in dropped)
         )
     return known
+
+
+#: The largest ``MANIFEST.json`` the readers below parse. A real one is a few kilobytes
+#: even with a long ``skipped`` list; the bound keeps a hostile member out of memory.
+_MANIFEST_READ_LIMIT = 16 * 1024 * 1024
+
+
+def _skips_in(raw: bytes) -> frozenset[PurePath] | None:
+    """The data-home-relative paths the manifest *raw* lists under ``skipped``.
+
+    ``None`` when *raw* is not a manifest object with a ``skipped`` list.
+    """
+    try:
+        manifest = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    skipped = manifest.get("skipped") if isinstance(manifest, dict) else None
+    if not isinstance(skipped, list):
+        return None
+    return frozenset(
+        PurePath(entry["path"])
+        for entry in skipped
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]
+    )
+
+
+def _recorded_skips(snap: Path) -> frozenset[PurePath] | None:
+    """What the EXTRACTED bundle *snap* lists as skipped; ``None`` with no readable record.
+
+    A replace restore asks this before it removes a live document the bundle lacks.
+    ``None`` keeps the ordinary reading of that absence: the source had none.
+    """
+    mf = snap / "MANIFEST.json"
+    try:
+        if not mf.is_file() or mf.stat().st_size > _MANIFEST_READ_LIMIT:
+            return None
+        return _skips_in(mf.read_bytes())
+    except OSError:
+        return None
+
+
+def _records_omission_of(skips: frozenset[PurePath] | None, rel: str) -> bool:
+    """Whether *skips* lists the data-home-relative *rel*, or a directory above it."""
+    if not skips:
+        return False
+    path = PurePath(rel)
+    return any(path == skip or skip in path.parents for skip in skips)
+
+
+def _bundle_lacks_all(bundle: Path, paths: list[str]) -> bool:
+    """Whether the published *bundle* is known to hold nothing at or under any of *paths*.
+
+    The ``--keep`` prune asks this of an OLDER bundle after a run that omitted *paths*
+    (data-home-relative): pruning such a bundle loses nothing the new one has. Known from
+    the bundle itself, in one of two ways:
+
+    * its own ``MANIFEST.json`` lists each path, or a directory above it, as skipped.
+      Staging adds the root's entries in sorted order, so the manifest is among the first
+      members and this common case reads only the start of the archive;
+    * its manifest is readable and the archive holds no regular file at or under any of
+      the paths: a bundle that did not record the gap because it had nothing there to
+      record, or was written by a build that has no reason code for the gap.
+
+    False otherwise, an unreadable archive or manifest included: a surplus bundle costs
+    disk, and a prune on a guess can cost the last copy of the data.
+    """
+    wanted = [PurePath(p) for p in paths]
+    manifest_read = False
+    try:
+        with tarfile.open(bundle) as tf:
+            for member in tf:
+                parts = PurePosixPath(member.name).parts
+                if len(parts) < 2:
+                    continue
+                if len(parts) == 2 and parts[1] == "MANIFEST.json" and not manifest_read:
+                    if not member.isfile() or member.size > _MANIFEST_READ_LIMIT:
+                        return False
+                    handle = tf.extractfile(member)
+                    skips = _skips_in(handle.read()) if handle is not None else None
+                    if skips is None:
+                        return False
+                    if all(_records_omission_of(skips, p) for p in paths):
+                        return True
+                    manifest_read = True
+                    continue
+                rel = PurePath(*parts[1:])
+                if member.isfile() and any(rel == p or p in rel.parents for p in wanted):
+                    return False
+    except (OSError, EOFError, tarfile.TarError, zlib.error):
+        return False
+    return manifest_read
 
 
 def _bundle_carries_named_stores(snap: Path) -> bool:
