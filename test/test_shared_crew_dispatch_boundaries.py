@@ -193,6 +193,9 @@ async def test_recovery_leaves_unaccepted_cards_in_the_same_slot(
         await asyncio.wait_for(drain_restored_parked_sends(state), timeout=30)
         if memory_pending:
             assert calls == [] and len(slot._queue) == len(saved)
+            # The sends the startup drain accepted wait for memory, not for a
+            # person; only the ordinary cards are held.
+            assert slot.to_dict()["queue_held_depth"] == len(plain)
             drained.clear()
             state.memory_startup_task.set_result(None)
             await await_until(drained)

@@ -128,6 +128,21 @@ def source_channels_of(item: Any) -> tuple[str, ...]:
 #: never emits it, so a restart forgets the choice and the card waits again.
 RESTORED_SEND_CHOSEN_KEY = "_restored_send_chosen"
 
+#: Marks a restored entry :func:`drain_restored_parked_sends` accepted to send: its
+#: durable parked work row proves it was admitted, so the startup drain starts it
+#: once memory is ready. Process-local like the keys above.
+RESTORED_BOOT_ACCEPTED_KEY = "_restored_boot_accepted"
+
+
+def is_held_queue_entry(item: dict[str, Any]) -> bool:
+    """Whether *item* waits for a person: a restored card nobody chose, and not a
+    parked send the startup drain accepted. The slot frame's ``queue_held_depth``
+    and the session status count these as no work coming."""
+    return bool(item.get(RESTORED_QUEUE_KEY)) and not (
+        item.get(RESTORED_SEND_CHOSEN_KEY) or item.get(RESTORED_BOOT_ACCEPTED_KEY)
+    )
+
+
 _DURABLE_QUEUE_KEYS: tuple[str, ...] = (
     "id",
     "content",
@@ -575,6 +590,7 @@ async def drain_restored_parked_sends(state: Any) -> None:
                     and work.reason in (None, ReasonCode.CANCELLED_BY_USER)
                 ):
                     queue_ids.add(entry["id"])
+                    entry[RESTORED_BOOT_ACCEPTED_KEY] = True
                     break
         if queue_ids:
             accepted[slot.key] = frozenset(queue_ids)
