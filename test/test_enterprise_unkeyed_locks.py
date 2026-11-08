@@ -73,7 +73,8 @@ def test_enterprise_reports_locked_config_paths(enterprise):
 
 
 def test_release_channel_file_is_ignored(enterprise, channel_file):
-    assert update_layout.release_channel() == "stable"
+    # RFC D10: the edition's own channel, never an oss one.
+    assert update_layout.release_channel() == "lts"
 
 
 def test_oss_release_channel_file_still_applies(channel_file):
