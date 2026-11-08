@@ -1176,28 +1176,31 @@ def wrap_argv(
             else:
                 guidance = _no_backend_guidance()
             # When the policy floor is what refused, every guidance above points
-            # at the wrong lever: the operator HAS set the opt-in and the flag is
-            # deliberately powerless here, so naming it would send them down a
-            # dead end.  Replace the remedy rather than appending to it.
-            policy_overrode_opt_in = floor_mandates_sandbox and opted_in
-            if policy_overrode_opt_in:
+            # at the wrong lever: the floor forbids unsandboxed execution no
+            # matter what agent.sandbox_allow_unsandboxed_exec holds (set true,
+            # set false, or never set), so naming that flag sends the operator
+            # down a dead end.  Keyed on ``floor_mandates_sandbox`` ALONE, not on
+            # whether the opt-in is set, because the flag is powerless against the
+            # floor in every one of those states.  Replace the remedy rather than
+            # appending to it.
+            if floor_mandates_sandbox:
                 guidance = (
                     "This host is GOVERNED: an enterprise policy pins "
                     f"sandbox.min_level={governance_floor!r}, which forbids "
                     "unsandboxed execution regardless of "
-                    "agent.sandbox_allow_unsandboxed_exec — that flag is set on "
-                    "this host and is deliberately powerless against the policy, "
-                    "so editing config.json cannot resolve this. A governed host "
-                    "also withholds the first-party carve-out, so Kiro Crew's own "
-                    "built-in spawns are refused here too: this host runs no "
-                    "agent subprocess until it has a working sandbox backend "
-                    "(see docs/system-specs/modules/security.md) or the policy "
-                    "owner relaxes sandbox.min_level."
+                    "agent.sandbox_allow_unsandboxed_exec — that flag is "
+                    "deliberately powerless against the policy whatever its "
+                    "value, so editing config.json cannot resolve this. A "
+                    "governed host also withholds the first-party carve-out, so "
+                    "Kiro Crew's own built-in spawns are refused here too: this "
+                    "host runs no agent subprocess until it has a working "
+                    "sandbox backend (see docs/system-specs/modules/security.md) "
+                    "or the policy owner relaxes sandbox.min_level."
                 )
                 sel_reason = (
                     "No sandbox backend available and a governance "
                     f"sandbox.min_level={governance_floor!r} floor forbids "
-                    "unsandboxed exec (the config opt-in is set but overridden)"
+                    "unsandboxed exec (the config opt-in is powerless here)"
                 )
                 refusal = (
                     "Sandbox backend unavailable and a governance policy forbids "
