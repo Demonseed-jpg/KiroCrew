@@ -1377,3 +1377,56 @@ class TestByNameKillArgvWindowIsQuoteAware:
     def test_benign_by_name_kills_stay_allowed(self, cmd):
         for prog in (_PK, _KA):
             assert _denied_by(cmd.format(p=prog, n=_NAME)) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # the word is DATA of a reader that names the product in a substitution
+            # (Opus/Security Scope review on d9dc3efde): main allowed these
+            "grep -l {p} $(git ls-files | grep {n})",
+            "grep -rn {p} $(git ls-files | grep {n})",
+            "echo {p} $(echo {n})",
+            "grep -l {p} $(ls ~/.{n}/logs/*.log)",
+            "grep -c {p} `ls ~/.{n}/logs/*.log`",
+            "grep -n {p} $(ls C:/Users/dev/.{n}/logs/*.log)",
+        ],
+    )
+    def test_by_name_word_as_reader_data_stays_allowed(self, cmd):
+        for prog in (_PK, _KA):
+            assert _denied_by(cmd.format(p=prog, n=_NAME)) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # a pipe into a pager, sorter or counter only shows the text
+            # (Opus 5.5 / GPT 6.1 review on e48757b01): main allowed these
+            "grep -l {p} $(git ls-files | grep {n}) | head",
+            "grep -l {p} $(git ls-files | grep {n}) | sort",
+            "grep -rn {p} $(git ls-files | grep {n}) | wc -l",
+            "echo {p} $(echo {n}) | tee /tmp/x",
+            "grep -rn {p} $(git ls-files | grep {n}) | less",
+            # a reader reached through an alias is still a reader
+            "g=grep; $g -l {p} $(git ls-files | grep {n})",
+            "g=grep; ${{g}} -l {p} $(git ls-files | grep {n}) | head",
+        ],
+    )
+    def test_reader_piped_to_a_viewer_or_aliased_stays_allowed(self, cmd):
+        for prog in (_PK, _KA):
+            assert _denied_by(cmd.format(p=prog, n=_NAME)) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # printed text a shell or xargs then RUNS is not data: an evaluator
+            # pipe ends the exemption
+            "echo {p} -f $(printf ')' ; echo {n}) | sh",
+            "printf '%s' {p} -f $(printf ')' ; echo {n}) | bash",
+            "grep -l {p} $(printf ')' ; echo {n}) | xargs {p} -f",
+            "echo {n} | xargs {p} -f",
+            # the reader exemption covers only ARGUMENTS, never the program word
+            "{p} -f $(printf ')' ; echo {n}); grep x y",
+        ],
+    )
+    def test_reader_exemption_does_not_excuse_a_real_kill(self, cmd):
+        for prog in (_PK, _KA):
+            assert _denied_by(cmd.format(p=prog, n=_NAME)) == _RULE_KILL

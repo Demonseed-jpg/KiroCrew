@@ -730,7 +730,14 @@ def _url_payload_command(n: int) -> str:
 #: search is factored into ``_raw_body_names_self``, and ``_is_self_kill`` runs the raw
 #: window once per anchor family. New detection for the public decoy shape, as a UNION with
 #: the token walk; no rule, threshold or existing pass changed. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_074
+#: Then by 49 more, to 35,123, for that window's reader exemption: the by-name
+#: anchor skips an argument of a ``_DATA_CONSUMER_PROGRAMS`` program (spelled
+#: literally or through an earlier ``g=grep`` alias), as the token leg's
+#: ``_data_consumer_exempt`` does, unless the segment pipes into an evaluator
+#: (``_pipes_into_evaluator``), plus the ``argv_floor`` manifest line for
+#: ``_raw_body_names_self``. It only narrows what the new window refuses; the bare
+#: ``kill`` leg is unchanged. Re-measured.
+_PACKAGE_LINE_BUDGET = 35_123
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
