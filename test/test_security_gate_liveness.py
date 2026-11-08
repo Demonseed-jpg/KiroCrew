@@ -724,7 +724,10 @@ def _url_payload_command(n: int) -> str:
 #: shares it; the dashboard copy was deleted. Re-measured.
 #: Raised by 4, from 35,036, for the Bearer branch's ``bearer_prefix`` group and pass
 #: 1's value-only span. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_040
+#: Raised by 55, from 35,040, for ``_quoted_assignment_scripts``: a carrier's quoted
+#: script that opens with an assignment is walked whole, so the assignment resolves
+#: inside it, unless the whole command only prints it. Deny-only. Re-measured.
+_PACKAGE_LINE_BUDGET = 35_095
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

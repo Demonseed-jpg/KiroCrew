@@ -971,8 +971,11 @@ def _is_self_program(token: str) -> bool:
     return _glob_could_expand_to(base, _SELF_PROGRAM_SPELLINGS)
 
 
-def _self_tokens(text_lower: str) -> "list[str]":
+def _self_tokens(text_lower: str, *, resolve: bool = True) -> "list[str]":
     """Tokenize the WHOLE command, resolving quoting before any splitting.
+
+    *resolve* False stops before assignment and alias resolution, so a quoted
+    script stays the one token its carrier receives.
 
     Splitting the raw text into segments first (as the pattern passes do) is
     unsafe for these rules: it cuts on a ``;`` or ``|`` that is INSIDE a quoted
@@ -1007,11 +1010,55 @@ def _self_tokens(text_lower: str) -> "list[str]":
                 " ; " if step.active and step.char == "\n" else step.text
                 for step in _iter_shell_chars(command)
             )
-        return _resolve_function_aliases(
-            _resolve_local_assignments(normalize_shell_command(command))
-        )
+        tokens = normalize_shell_command(command)
+        if not resolve:
+            return tokens
+        return _resolve_function_aliases(_resolve_local_assignments(tokens))
     except Exception:
         return []
+
+
+def _quoted_assignment_scripts(source: str, *, top: bool) -> "list[str]":
+    """Carrier payloads of *source* that are a whole script opening with an assignment.
+
+    The assignment resolver splits such a token at its inner operator (the test
+    :func:`_split_glued_operators` applies, reused here), so the walk would only
+    see the script's first statement.  Read from the unresolved tokens, the
+    whole script becomes a frame of its own, where its assignments resolve.
+
+    A script that is only a printer's argument (``echo bash -c '<script>'``) runs
+    nothing, so it adds no frame -- but only when *source* is that ONE command,
+    split quote-aware: a second command could redefine the printer
+    (``echo(){ bash "$@"; }; echo -c …``) or run what it printed.  And only at the
+    *top* frame, the agent's own command line: a nested printer's output is read
+    by whatever encloses it (``bash -c 'printf …' | bash``).
+    """
+    if "=" not in source:
+        return []
+    tokens = _self_tokens(source, resolve=False)
+    scripts = [
+        payload
+        for payload in _nested_shell_payloads(tokens, allow_join=False)
+        if _LOCAL_ASSIGN_RE.match(payload) and _CONTROL_OPERATOR_RE.search(payload)
+    ]
+    if scripts and top and _only_prints(source, tokens):
+        return []
+    return scripts
+
+
+def _only_prints(source: str, tokens: "list[str]") -> bool:
+    """True when *source* is one command whose program only prints its words."""
+    from .shell_commands import read_commands  # the reader imports this module
+
+    # read past every ``<<``: the default read stops there, and hid the lines after it
+    commands = [c for c in read_commands(source, heredocs=True) if c.words or c.heredocs]
+    if len(commands) != 1 or commands[0].heredocs:
+        return False
+    if _data_consumer_command_disqualified(tokens):
+        return False
+    # the first named program (a leading ``FOO=bar`` names none), and only a pure
+    # printer: other data consumers can run what they read (gawk's ``@f()`` call)
+    return next((p for p in _argv_programs(tokens) if p), "") in {"echo", "printf", "print"}
 
 
 def _protected_name_in_substitution(tokens: "list[str]", start: int) -> str:
@@ -1575,8 +1622,13 @@ def _nested_shell_payloads(
 # ``${a[@]}`` / ``${a[*]}`` / ``$a[@]`` -- the whole array as separate words.
 
 
-def _shell_payload_walk(text_lower: str) -> "list[tuple[str, list[str]]]":
+def _shell_payload_walk(
+    text_lower: str, *, whole_scripts: bool = True
+) -> "list[tuple[str, list[str]]]":
     """``(source, argv)`` for *text_lower* and every nested shell payload in it.
+
+    *whole_scripts* False leaves out the frames :func:`_quoted_assignment_scripts`
+    adds, for the source-text consumer that reads the git-publish verb.
 
     ``bash -c "kirocrew token"`` tokenizes to ``['bash', '-c', 'kirocrew token']``
     -- the dangerous command is a single opaque token, so a direct scan cannot
@@ -1632,6 +1684,9 @@ def _shell_payload_walk(text_lower: str) -> "list[tuple[str, list[str]]]":
         from .shell_commands import redirect_hidden_payloads  # the reader imports this module
 
         nested = list(nested) + redirect_hidden_payloads(source)
+        if whole_scripts:
+            # only the seed frame's parent_len exceeds the whole command's length
+            nested += _quoted_assignment_scripts(source, top=parent_len > len(text_lower))
         for payload in nested + _substitution_bodies(_fold_line_continuations(source)):
             # Descend through EVERY literal payload, to any depth.  Termination is
             # structural, not a cap: a payload is carried inside one token of its

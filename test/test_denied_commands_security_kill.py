@@ -272,6 +272,28 @@ class TestSelfProtectionKillTargetScoping:
                 (f"X={_NAME}; $X>/tmp/x {_TOK}", _RULE_MINT),
                 (f"P={_PK}; $P -f {_NAME}", _RULE_KILL),
             ),
+            # A carrier's quoted script that assigns the name and then uses it is read
+            # as a script of its own, so the assignment resolves inside it.
+            *_named(
+                "test_quoted_script_assignment_resolves_in_its_own_frame",
+                (f"bash -c 'X={_NAME}; $X {_TOK}'", _RULE_MINT),
+                (f"zsh -Cc 'X={_NAME}; $X {_TOK}'", _RULE_MINT),
+                (f"bash -c '{'A' * 78}={_NAME}; ${'A' * 78} {_TOK}'", _RULE_MINT),
+                (f"bash -c 'P={_PK}; $P -f {_NAME}'", _RULE_KILL),
+                (f"echo x; bash -c 'X={_NAME}; $X {_TOK}'", _RULE_MINT),
+                (f"echo x | bash -c 'X={_NAME}; $X {_TOK}'", _RULE_MINT),
+                # A printer redefined in the same command runs what it is handed.
+                (f"echo(){{ bash \"$@\"; }}; echo -c 'P={_PK}; $P -f {_NAME}'", _RULE_KILL),
+                # A heredoc does not end the read: the line after its tag is a command.
+                (f"echo <<'EOF'\nEOF\nbash -c 'P={_PK}; $P -f {_NAME}'", _RULE_KILL),
+                # Only a pure printer is excused: gawk can call `system` indirectly.
+                (
+                    f"awk 'BEGIN {{f=\"system\"; @f(ARGV[2])}}' -- bash -c 'P={_PK}; $P -f {_NAME}'",
+                    _RULE_KILL,
+                ),
+                # A nested printer's output is read by what encloses it.
+                (f"bash -c 'echo bash -c \"P={_PK}; \\$P -f {_NAME}\"' | bash", _RULE_KILL),
+            ),
             # `$'...'` and `$"..."` are quoting forms, so the `$` left behind once the
             # quotes come off is not part of the program name.
             *_named(
@@ -438,6 +460,20 @@ class TestSelfProtectionKillTargetScoping:
                 "kiro[x]few {v}",
                 "ls ./bin/kiro*rew",
                 "echo kiro[c]rew {v}",
+            ),
+            *_named(
+                "test_quoted_script_assignment_without_the_cli_allowed",
+                "bash -c 'X=log.txt; grep -c {v} $X'",
+            ),
+            # A printer's argument runs nothing, so a quoted script it only prints adds no
+            # frame: the extra reading is for scripts a shell actually runs.
+            *_named(
+                "test_printed_quoted_script_assignment_allowed",
+                "echo bash -c 'X={n}; $X {v}'",
+                "printf '%s\\n' bash -c 'X={n}; $X {v}'",
+                "printf '%s;%s\\n' bash -c 'X={n}; $X {v}'",
+                "echo ';' bash -c 'X={n}; $X {v}'",
+                "FOO=bar echo bash -c 'X={n}; $X {v}'",
             ),
             *_named(
                 "test_ordinary_text_processing_still_allowed",
