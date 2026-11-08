@@ -606,6 +606,130 @@ class TestDashboardOrigins:
         assert src.index(hook) < src.index("await asyncio.to_thread(start_refresher)")
 
 
+class TestBindRefresh:
+    """A live refresh that refuses the bound address restarts the gateway, failing closed."""
+
+    @pytest.fixture
+    def gateway(self, enterprise, install_policy, monkeypatch):
+        import kiro_crew.sel as sel_mod
+        from kiro_crew.dashboard import bind_refresh
+        from kiro_crew.dashboard.handlers import updates
+
+        seen = SimpleNamespace(audits=[], restarts=[], stops=[], target=(None, "python", None))
+        monkeypatch.setattr(
+            sel_mod,
+            "sel",
+            lambda: SimpleNamespace(log_governance_decision=lambda **kw: seen.audits.append(kw)),
+        )
+
+        async def _restart(state, **_kw):
+            seen.restarts.append(state)
+            return True
+
+        async def _target(*_a):
+            return seen.target
+
+        monkeypatch.setattr(updates, "_restart_gateway", _restart)
+        monkeypatch.setattr(updates, "_resolve_restart_target", _target)
+        monkeypatch.setattr(
+            bind_refresh,
+            "shutdown_event",
+            SimpleNamespace(is_set=lambda: bool(seen.stops), set=lambda: seen.stops.append(1)),
+        )
+        seen.state = SimpleNamespace(
+            _gateway_restart_in_progress=False,
+            _background_tasks=set(),
+            _bind_refused_stop=False,
+            _listener_sidecars={},
+        )
+
+        def poll(host: str = "0.0.0.0") -> int:
+            """One confirming poll on this thread, then the loop's half; the count of
+            restarts it scheduled. The second loopback listener is never the one asked."""
+            seen.state._listener_sidecars = {
+                "secondary": (5476, "::1", "s"),
+                "primary": (5476, host, "s"),
+            }
+            on_loop: list = []
+            loop = SimpleNamespace(call_soon_threadsafe=lambda fn, *a: on_loop.append((fn, a)))
+            bind_refresh.restart_if_bind_refused(seen.state, loop)
+
+            async def _run_on_loop() -> None:
+                for fn, args in on_loop:
+                    fn(*args)
+                pending = set(seen.state._background_tasks)
+                if pending:
+                    await asyncio.wait_for(asyncio.gather(*pending), 10)
+
+            asyncio.run(_run_on_loop())
+            return len(on_loop)
+
+        seen.poll = poll
+        return seen
+
+    def test_a_refused_bind_restarts_the_gateway(self, gateway, install_policy) -> None:
+        install_policy({"bind_address": _allow("0.0.0.0")})
+        assert gateway.poll() == 0
+        install_policy({"bind_address": _allow("10.0.0.5")})
+        assert gateway.poll() == 1
+        assert gateway.restarts == [gateway.state] and not gateway.stops
+        assert [(r["scope"], r["item"], r["outcome"]) for r in gateway.audits] == [
+            ("bind_address", "0.0.0.0", "denied")
+        ]
+
+    def test_loopback_is_never_asked(self, gateway, install_policy, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "kiro_crew.edition_locks.policy_permits",
+            lambda *a, **k: pytest.fail("loopback must not be asked"),
+        )
+        assert gateway.poll("127.0.0.1") == 0
+
+    def test_a_refused_restart_stops_the_gateway(self, gateway, install_policy) -> None:
+        from kiro_crew.dashboard import bind_refresh
+
+        install_policy({})
+        gateway.target = (None, None, ("restart_interpreter_missing", "Cannot restart"))
+        assert bind_refresh.bind_refused_exit_code(gateway.state) == 0
+        gateway.poll()
+        assert gateway.stops == [1] and not gateway.restarts
+        assert bind_refresh.bind_refused_exit_code(gateway.state) == 77
+
+    def test_an_update_that_declined_to_restart_stops_the_gateway(
+        self, gateway, install_policy, monkeypatch
+    ) -> None:
+        from kiro_crew import update_ownership
+
+        monkeypatch.setattr(update_ownership, "_restart_refusal", "dependency sync failed")
+        install_policy({})
+        gateway.poll()
+        assert gateway.stops == [1] and not gateway.restarts
+
+    def test_an_update_or_a_restart_in_progress_waits(self, gateway, install_policy) -> None:
+        from kiro_crew import update_ownership
+
+        install_policy({})
+        gateway.target = (None, None, ("restart_interpreter_missing", "Cannot restart"))
+        with update_ownership.step(update_ownership.Step.GIT_AUTO_UPDATE):
+            gateway.poll()
+        gateway.state._gateway_restart_in_progress = True
+        gateway.poll()
+        assert not gateway.restarts and not gateway.stops
+
+    def test_the_gateway_registers_the_restart_and_its_exit_status(self) -> None:
+        """One hook for whichever server entry point started, registered before the
+        poller starts, and the self-stop exits non-zero."""
+        from pathlib import Path as _Path
+
+        from kiro_crew.slack.gateway_runtime import exit_path, service_boot
+
+        src = _Path(service_boot.__file__).read_text(encoding="utf-8")
+        hook = "register_post_install_hook(lambda: restart_if_bind_refused(_state, _loop))"
+        assert hook in src
+        assert src.index(hook) < src.index("await asyncio.to_thread(start_refresher)")
+        exit_src = _Path(exit_path.__file__).read_text(encoding="utf-8")
+        assert "or bind_refused_exit_code(self.dashboard_state)" in exit_src
+
+
 class TestApprovedOriginSpelling:
     """An approved origin is stored in the form ``check_origin`` compares."""
 
