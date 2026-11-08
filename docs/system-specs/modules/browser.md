@@ -50,6 +50,16 @@ at `<data-home>/browser-harness/venv` (`python -m venv --clear` on that
 directory alone, so the Chromium beside it survives a re-install; then
 `pip install --require-hashes -r browser_harness/requirements.lock`: 12 pinned
 requirements, 176 sha256 hashes, compiled for Python 3.11+ on every platform).
+The venv links to the base interpreter that built it, which under Toolbox is a
+versioned directory Toolbox later prunes. A finished install (marker at this
+`HARNESS_VERSION`) whose interpreter link dangles, built by the gateway's own
+Python minor version (`pyvenv.cfg` `version`) and holding the pip it needs, is
+repaired in place instead of cleared: the dangling `python*` links are unlinked
+and `python -m venv --upgrade --without-pip` re-points the venv at the gateway's
+interpreter, keeping site-packages, so the pip step finds every pin already
+installed and needs no package index. Any other missing interpreter (no marker,
+another version, another minor version, a venv linked to a runtime copy, below) is
+still a `--clear` rebuild.
 On Linux with a glibc older than 2.27 (Amazon Linux 2: 2.26) the locked
 `pillow==12.3.0`, which `browser-harness` itself pins, has no wheel and pip has to
 build its sdist. `build_deps.py` checks first, from the filesystem alone, for a C
@@ -63,6 +73,27 @@ host missing any of them is refused at `preparing`, before the marker or the ven
 is touched, with what is missing and the `yum`/`apt-get` command that installs it.
 A venv that already holds the locked pillow and is not being rebuilt is not
 checked, since pip has nothing to build.
+A runtime that already ships the harness asks no index at all. When the gateway's
+own interpreter carries `browser-harness`, `cdp-use` and `fetch-use` at the
+versions the lock pins (a distribution that bundles the harness beside the
+gateway), the venv is made `--without-pip`, a `kirocrew-runtime-harness.pth` in
+its site-packages names the directories that copy lives in, and
+`<venv>/python -I -c` must import `browser_harness` and resolve those three
+versions before the marker is written. A host whose index is unreachable or
+refuses its credentials can therefore still install. If that check fails (an
+editable install of the harness at the pinned version, say, whose finder `.pth`
+is not processed in the venv), nothing falls back to pip: the install fails at
+`installing_harness` with the check's error. A path line puts only those
+directories on the venv's `sys.path`: unlike `--system-site-packages`, the
+interpreter's own site-packages stays off it, and the `.pth` files in a linked
+directory are not processed, but a `sitecustomize.py` inside a linked directory
+would still run in the daemon. The copy's other dependencies are the runtime's
+own releases rather than the lock's, and nothing hash-checks it: it has the same
+exposure as the gateway's other third-party distributions and its interpreter's
+standard library, since only the `kiro_crew` package directory is sealed
+([security](security.md), the packaged install directory). Nothing is built, so
+the pillow check does not apply; a venv pip filled is rebuilt when the runtime
+starts shipping the copy, and a linked venv is rebuilt when it stops.
 Kiro's own Chromium (Chrome for Testing `154.0.8037.0`, the build Playwright's
 `chromium-1244` ships, fetched from Google's bucket and then Playwright's CDN,
 which alone hosts linux-arm64) is downloaded into the same prefix for hosts with
@@ -84,10 +115,14 @@ start, in the background task that first reclaims a stray daemon
 (`handlers/browser_harness_status.py`) starts the SAME install job when the
 Harness is missing or stale (`install.harness_current`:
 installed AND the marker's `lock_sha256` equals the shipped lock's digest, so a
-re-pin without a version bump reinstalls). It adds Kiro's Chromium only when
-discovery would launch it (no usable Chrome/Edge, or `browser.choice` pins
-`kiro_chromium`/`headless`) and it is not on disk; a host that drives the user's
-Chrome never downloads it unasked (Settings' Install still installs both). After
+re-pin without a version bump reinstalls; a venv linked to a runtime copy is also
+stale once its `.pth` no longer names the directories the gateway's interpreter
+loads the pinned copy from, so an update that prunes or moves that copy, or ships
+it at other pins, relinks or rebuilds the venv at the next start). It adds Kiro's
+Chromium only when discovery would launch it (no usable Chrome/Edge, or
+`browser.choice` pins `kiro_chromium`/`headless`) and it is not on disk; a host
+that drives the user's Chrome never downloads it unasked (Settings' Install still
+installs both). After
 a successful install it warms the connection the way Test does ONLY for a
 headless Kiro Chromium: connecting the user's Chrome or Edge is what raises
 Chrome's Allow sheet, and a headed Kiro Chromium would open a window, so both stay
@@ -127,20 +162,28 @@ shorter place is the system temp dir, which no sandbox mask covers, and the
 daemon resolves symlinks before binding, so an alias cannot help (the guard
 measures the RESOLVED home for the same reason). The daemon runs with
 `python -I`, like the helper worker, so the gateway's working directory can never
-shadow the pinned package; the INSTALLER's two spawns (`python -I -m venv`,
-`<venv>/python -I -m pip`) run the same way, with the `PYTHON*` and `PIP_*`
-families scrubbed from their environment and the prefix as their working
-directory, because a pod gateway's cwd is the agent's workspace and a `pip/`
-package written there would otherwise run as the owner the moment they press
-Install. `NO_PROXY`/`no_proxy` always carry `127.0.0.1,localhost`: neither
-`urllib` nor `websockets` bypasses a proxy for loopback on its own, and a shell
-with `HTTPS_PROXY` set would send the relay URL (secret and all) to the proxy
-host. A version bump re-reads the package's telemetry and auth modules before it
-lands, because 0.1.13's telemetry is on by default and its run event carries the
-agent's whole script unscrubbed.
+shadow the pinned package; the INSTALLER's two spawns (`python -I -m venv`, then
+`<venv>/python -I -m pip`, or the linked venv's `-I -c` check) run the same way,
+with the `PYTHON*` and `PIP_*` families scrubbed from their environment and the
+prefix as their working directory, because a pod gateway's cwd is the agent's
+workspace and a `pip/` package written there would otherwise run as the owner the
+moment they press Install. Their environment also sets `PIP_CONFIG_FILE` to the
+null device, so pip loads no config file (the user's `~/.config/pip/pip.conf` or
+`~/.pip/pip.conf`, `/etc/pip.conf`, the venv's own) and installs from its default
+index, PyPI: an `index-url` in the user's file, such as a CodeArtifact repository
+whose login has expired, would otherwise answer 401 for every locked wheel and
+fail the install with pip's raw output. A mirror set in pip's config or in
+`PIP_INDEX_URL` is therefore not used; the lock's hashes pin every file either
+way. `NO_PROXY`/`no_proxy` always carry `127.0.0.1,localhost`: neither `urllib`
+nor `websockets` bypasses a proxy for loopback on its own, and a shell with
+`HTTPS_PROXY` set would send the relay URL (secret and all) to the proxy host. A
+version bump re-reads the package's telemetry and auth modules before it lands,
+because 0.1.13's telemetry is on by default and its run event carries the agent's
+whole script unscrubbed.
 
-**The helper worker.** The gateway's Python has no `browser_harness` package, so
-each helper call runs in a worker the venv's interpreter executes
+**The helper worker.** The gateway never imports `browser_harness` (its Python
+carries none unless its runtime bundles the harness), so each helper call runs in
+a worker the venv's interpreter executes
 (`<prefix>/bin/python -I browser_harness/helper_worker.py`, JSON lines on its
 pipes, one call at a time behind a lock, `CALL_TIMEOUT_SECS = 90`). The pipe is
 read with an 8 MiB line limit (`WORKER_LINE_LIMIT`; asyncio's 64 KiB default is

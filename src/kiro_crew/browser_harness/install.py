@@ -7,6 +7,13 @@ lock ships in this package (``setup.cfg`` package data) and pins every wheel of
 gateway is exactly what was audited: a mirror or a hijacked index cannot substitute a
 file without failing the hash check.
 
+A runtime that already ships the harness at the lock's pins (a distribution that
+bundles it beside the gateway) needs no index at all: the venv is made without pip and
+a ``.pth`` file points it at the directories the gateway's own interpreter loads that
+copy from, so a host with no reachable index can still install the engine. The copy
+stays where the runtime keeps it, outside the prefix, with the same exposure as the
+gateway's other third-party distributions and its interpreter's standard library.
+
 The prefix is a ``READONLY`` crew-home leaf (``sandbox_leaves``): a sandboxed process
 can neither replace the interpreter the gateway later executes nor read the Chromium
 profile beside it. The installer runs in the gateway, outside the sandbox, so it can
@@ -21,12 +28,14 @@ from __future__ import annotations
 import asyncio
 import functools
 import hashlib
+import importlib.metadata
 import importlib.util
 import json
 import logging
 import os
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -95,8 +104,8 @@ _ISOLATED: tuple[str, ...] = ("-I",)
 #: Environment prefixes the children never inherit. ``-I`` already ignores the
 #: ``PYTHON*`` family inside the interpreter; pip reads ``PIP_*`` itself
 #: (``PIP_INDEX_URL``, ``PIP_FIND_LINKS``, a config file) and is given only the
-#: one value below. The proxy variables ARE inherited: pip needs them to reach the
-#: index on a proxied network.
+#: two values in :func:`_child_env`. The proxy variables ARE inherited: pip needs
+#: them to reach the index on a proxied network.
 _SCRUBBED_ENV_PREFIXES: tuple[str, ...] = ("PYTHON", "PIP_")
 
 #: pip flags: hashes are mandatory, nothing is prompted, no version nag on stderr.
@@ -106,6 +115,26 @@ _PIP_ARGS: tuple[str, ...] = (
     "--no-input",
     "--disable-pip-version-check",
     "-r",
+)
+
+#: The ``.pth`` file in the venv's site-packages that links it to the gateway
+#: interpreter's own copy of the harness: one directory per line.
+RUNTIME_PTH_FILE = "kirocrew-runtime-harness.pth"
+
+#: What the gateway's interpreter must carry at the lock's own pins for its copy to
+#: stand in for the pip install: the harness and the two packages of its own project
+#: it is released in step with. The rest of the lock is general-purpose libraries a
+#: bundling runtime shares with its other packages, so their releases may differ.
+_RUNTIME_DISTRIBUTIONS: tuple[str, ...] = ("browser-harness", "cdp-use", "fetch-use")
+
+#: Run by the linked venv's interpreter: the harness imports, and each ``name==version``
+#: argument is the version the venv itself resolves.
+_RUNTIME_CHECK = (
+    "import importlib.metadata as m, sys, browser_harness\n"
+    "for pin in sys.argv[1:]:\n"
+    "    name, _, want = pin.partition('==')\n"
+    "    if m.version(name) != want:\n"
+    "        sys.exit(f'{name} {m.version(name)} in the venv, not {want}')\n"
 )
 
 ProgressCallback = Callable[[str, str], None]
@@ -200,15 +229,22 @@ def harness_current(home: Path) -> bool:
 
     :func:`install_state` answers "installed" from the version alone; a build that
     re-pins a dependency without moving ``HARNESS_VERSION`` changes only the lock,
-    so the marker's ``lock_sha256`` is what tells a stale venv apart. Never raises:
-    an unreadable marker or lock reads as "not current", which the startup
-    auto-install answers by running the install again.
+    so the marker's ``lock_sha256`` is what tells a stale venv apart. A venv linked
+    to a runtime copy is current only while its :data:`RUNTIME_PTH_FILE` names the
+    directories :func:`_runtime_harness_dirs` finds now: an update that prunes or
+    moves the tree holding that copy, or ships it off the lock's pins, changes
+    neither the marker nor the lock. Never raises: an unreadable marker, lock or
+    ``.pth`` reads as "not current", which the startup auto-install answers by
+    running the install again.
     """
     if not install_state(home).installed:
         return False
+    prefix = harness_prefix(home)
     try:
-        data = json.loads((harness_prefix(home) / MARKER_FILE).read_text(encoding="utf-8"))
-        return isinstance(data, dict) and data.get("lock_sha256") == lock_digest()
+        data = json.loads((prefix / MARKER_FILE).read_text(encoding="utf-8"))
+        if not (isinstance(data, dict) and data.get("lock_sha256") == lock_digest()):
+            return False
+        return not _venv_links_runtime(prefix) or _linked_dirs(prefix) == _runtime_harness_dirs()
     except (OSError, ValueError):
         return False
 
@@ -303,6 +339,12 @@ def _install_harness(
         raise InstallError(STAGE_PREPARING, f"lock file missing: {LOCK_FILE}")
     # The prefix exists before either spawn: it is the children's working directory.
     prefix.mkdir(parents=True, exist_ok=True)
+    # A runtime that ships the pinned harness is used as it is: no pip, no index and
+    # nothing to build, so neither the pip checks nor the pillow refusal below apply.
+    runtime_dirs = _runtime_harness_dirs()
+    if runtime_dirs is not None:
+        _link_runtime_harness(prefix, notify, run, runtime_dirs, stop=stop)
+        return
     # Interpreters differ in which half of pip they ship: the packaged app has
     # ``pip`` but no ``ensurepip``; the Toolbox runtime has ``ensurepip`` but no
     # ``pip``. With the gateway's pip, the venv is made ``--without-pip`` and that
@@ -317,11 +359,23 @@ def _install_harness(
     state = install_state(prefix.parent)
     python = venv_python(prefix)
     # Without the gateway's pip the venv must carry its own: a venv left by an
-    # earlier ``--without-pip`` run has none, so it is rebuilt.
-    rebuild = (
+    # earlier ``--without-pip`` run has none, so it is rebuilt. A venv linked to a
+    # runtime copy is rebuilt too, so that copy cannot linger behind the lock's.
+    venv_pip_ok = gateway_pip or _venv_has_pip(prefix)
+    links_runtime = _venv_links_runtime(prefix)
+    # A finished install whose interpreter is gone (the base Python it links to was
+    # removed, as when Toolbox prunes the version the venv was built on) still holds
+    # every locked package. Re-pointing it at this interpreter is offline; a
+    # ``--clear`` rebuild would fetch every wheel from the index again.
+    repair = (
         not state.python
-        or state.version != HARNESS_VERSION
-        or (not gateway_pip and not _venv_has_pip(prefix))
+        and state.version == HARNESS_VERSION
+        and venv_pip_ok
+        and not links_runtime
+        and _venv_built_by_this_minor(prefix)
+    )
+    rebuild = not repair and (
+        not state.python or state.version != HARNESS_VERSION or not venv_pip_ok or links_runtime
     )
     # Before anything is cleared: a host that cannot build the locked pillow is
     # refused with the missing pieces named, and a working install stays as it is.
@@ -329,7 +383,17 @@ def _install_harness(
         refused = build_deps.refusal_for_this_host()
         if refused is not None:
             raise InstallError(STAGE_PREPARING, refused)
-    if rebuild:
+    if repair:
+        notify(STAGE_CREATING_VENV, str(prefix))
+        # ``venv --upgrade`` keeps an interpreter entry that is already a symlink,
+        # dangling or not, so the links into the removed Python go first. It
+        # rewrites ``pyvenv.cfg`` and the links and leaves site-packages as it is;
+        # ``--without-pip`` keeps the pip the venv already has.
+        _drop_dangling_interpreter_links(prefix)
+        repair_argv = [sys.executable, *_ISOLATED, "-m", "venv", "--upgrade", "--without-pip"]
+        repair_argv.append(str(venv_dir(prefix)))
+        _step(run, repair_argv, _VENV_TIMEOUT_SECS, STAGE_CREATING_VENV)
+    elif rebuild:
         # The marker goes first: a rebuild that fails part-way must read as
         # "not installed", never as a finished install of a venv now cleared.
         (prefix / MARKER_FILE).unlink(missing_ok=True)
@@ -353,8 +417,113 @@ def _install_harness(
         STAGE_INSTALLING_HARNESS,
     )
     _check_stop(stop, STAGE_INSTALLING_HARNESS)
-    marker = {"version": HARNESS_VERSION, "lock_sha256": lock_digest(), "python": str(python)}
+    _write_marker(prefix)
+
+
+def _link_runtime_harness(
+    prefix: Path,
+    notify: ProgressCallback,
+    run: Callable[..., subprocess.CompletedProcess[str]],
+    dirs: list[str],
+    *,
+    stop: threading.Event | None = None,
+) -> None:
+    """Point the venv at the gateway interpreter's own copy of the harness.
+
+    The venv is made ``--without-pip`` and :data:`RUNTIME_PTH_FILE` names each
+    directory that copy lives in. A path line puts that directory on ``sys.path``:
+    unlike ``--system-site-packages``, the interpreter's own site-packages stays off
+    the venv's path, and the ``.pth`` files in a linked directory are not processed.
+    A ``sitecustomize.py`` inside a linked directory would still run. A venv pip
+    filled is rebuilt, since its own site-packages would shadow the copy.
+    """
+    state = install_state(prefix.parent)
+    if not state.python or state.version != HARNESS_VERSION or not _venv_links_runtime(prefix):
+        (prefix / MARKER_FILE).unlink(missing_ok=True)
+        notify(STAGE_CREATING_VENV, str(prefix))
+        venv_argv = [sys.executable, *_ISOLATED, "-m", "venv", "--clear", "--without-pip"]
+        _step(run, [*venv_argv, str(venv_dir(prefix))], _VENV_TIMEOUT_SECS, STAGE_CREATING_VENV)
+    notify(STAGE_INSTALLING_HARNESS, HARNESS_VERSION)
+    site = _venv_site_packages(prefix)
+    site.mkdir(parents=True, exist_ok=True)
+    (site / RUNTIME_PTH_FILE).write_text("".join(f"{d}\n" for d in dirs), encoding="utf-8")
+    pins = _lock_pins()
+    check = [f"{name}=={pins[name]}" for name in _RUNTIME_DISTRIBUTIONS]
+    _step(
+        run,
+        [str(venv_python(prefix)), *_ISOLATED, "-c", _RUNTIME_CHECK, *check],
+        _VENV_TIMEOUT_SECS,
+        STAGE_INSTALLING_HARNESS,
+    )
+    _check_stop(stop, STAGE_INSTALLING_HARNESS)
+    _write_marker(prefix)
+
+
+def _write_marker(prefix: Path) -> None:
+    """Written last: the install under *prefix* finished, from the lock this build ships."""
+    marker = {
+        "version": HARNESS_VERSION,
+        "lock_sha256": lock_digest(),
+        "python": str(venv_python(prefix)),
+    }
     (prefix / MARKER_FILE).write_text(json.dumps(marker, indent=2), encoding="utf-8")
+
+
+def _lock_pins(lock: Path = LOCK_FILE) -> dict[str, str]:
+    """``{name: version}`` for each requirement line of the lock (``name==version \\``)."""
+    pins: dict[str, str] = {}
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith(("#", " ", "-")):
+            continue
+        name, sep, rest = line.partition("==")
+        if sep:
+            pins[name.strip().lower().replace("_", "-")] = rest.split(" ", 1)[0]
+    return pins
+
+
+def _runtime_harness_dirs() -> list[str] | None:
+    """Where the gateway's interpreter loads the pinned harness from, or ``None``.
+
+    ``None`` unless every one of :data:`_RUNTIME_DISTRIBUTIONS` is installed for this
+    interpreter at the version the lock pins. Reads metadata only, never spawns.
+    """
+    pins = _lock_pins()
+    dirs: list[str] = []
+    for name in _RUNTIME_DISTRIBUTIONS:
+        try:
+            dist = importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            return None
+        if dist.version != pins.get(name):
+            return None
+        where = str(dist.locate_file(""))
+        if where not in dirs:
+            dirs.append(where)
+    return dirs
+
+
+def _venv_site_packages(prefix: Path) -> Path:
+    """The venv's site-packages, by the scheme ``python -m venv`` lays it out with."""
+    base = str(venv_dir(prefix))
+    layout = {"base": base, "platbase": base, "installed_base": base, "installed_platbase": base}
+    return Path(sysconfig.get_path("purelib", "venv", layout))
+
+
+def _venv_links_runtime(prefix: Path) -> bool:
+    """Whether the venv runs the gateway interpreter's copy of the harness (no spawn)."""
+    try:
+        return (_venv_site_packages(prefix) / RUNTIME_PTH_FILE).is_file()
+    except OSError:
+        return False
+
+
+def _linked_dirs(prefix: Path) -> list[str]:
+    """The directories the venv's :data:`RUNTIME_PTH_FILE` names, in its order.
+
+    Raises ``OSError`` or ``ValueError`` when the file cannot be read.
+    """
+    text = (_venv_site_packages(prefix) / RUNTIME_PTH_FILE).read_text(encoding="utf-8")
+    return [line for line in text.splitlines() if line]
 
 
 def _has_module(name: str) -> bool:
@@ -373,6 +542,33 @@ def _venv_has_pip(prefix: Path) -> bool:
         return any(p.is_dir() for p in venv.glob(pattern))
     except OSError:
         return False
+
+
+def _venv_built_by_this_minor(prefix: Path) -> bool:
+    """Whether the venv's ``pyvenv.cfg`` names this interpreter's X.Y (no spawn).
+
+    Its compiled wheels and its ``lib/pythonX.Y`` layout only fit that minor version.
+    """
+    try:
+        text = (venv_dir(prefix) / "pyvenv.cfg").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "version":
+            return value.strip().split(".")[:2] == [str(n) for n in sys.version_info[:2]]
+    return False
+
+
+def _drop_dangling_interpreter_links(prefix: Path) -> None:
+    """Unlink each ``python*`` entry of the venv's script directory whose target is gone."""
+    try:
+        entries = list(venv_python(prefix).parent.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.startswith("python") and entry.is_symlink() and not entry.exists():
+            entry.unlink(missing_ok=True)
 
 
 def _venv_has_locked_pillow(prefix: Path) -> bool:
@@ -413,12 +609,13 @@ def _run(
 ) -> subprocess.CompletedProcess[str]:
     """The installer's one spawn: a fixed argv of our own interpreter and the venv's.
 
-    Every token is a constant of this module or a path derived from the data home;
-    the two triggers are the owner pressing Install in Settings and the gateway's
-    own startup auto-install, and neither passes anything a caller chose. The working
-    directory is the prefix (owner-only, never the gateway's own cwd), the
-    interpreter runs isolated (``-I`` in the argv) and the environment is
-    :func:`_child_env`: three fences against the same agent-writable cwd.
+    Every token is a constant of this module, a pin of the shipped lock or a path
+    derived from the data home; the two triggers are the owner pressing Install in
+    Settings and the gateway's own startup auto-install, and neither passes anything
+    a caller chose. The working directory is the prefix (owner-only, never the
+    gateway's own cwd), the interpreter runs isolated (``-I`` in the argv) and the
+    environment is :func:`_child_env`: three fences against the same agent-writable
+    cwd.
     """
     _check_stop(stop, STAGE_PREPARING)
     # Files rather than PIPEs let the shared synchronous tree-stop helper wait
@@ -459,9 +656,20 @@ def _run(
 
 
 def _child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The gateway's environment minus the ``PYTHON*`` and ``PIP_*`` families, plus our two."""
+    """The gateway's environment minus the ``PYTHON*`` and ``PIP_*`` families, plus our three.
+
+    ``PIP_CONFIG_FILE`` is the null device because pip also reads config files it
+    finds from ``HOME`` and the system (``~/.config/pip/pip.conf``,
+    ``~/.pip/pip.conf``, ``/etc/pip.conf``, the venv's own): an ``index-url`` there
+    replaces PyPI, and a CodeArtifact repository whose login expired answers 401 for
+    every locked wheel. Set to ``os.devnull``, pip loads none of them (``--isolated``
+    still loads the system and venv files), so the index is pip's default and the
+    lock's hashes pin every file it serves. The variable also reaches the pip that
+    builds an sdist's build environment, which a command-line flag would not.
+    """
     source = os.environ if base is None else base
     env = {k: v for k, v in source.items() if not k.upper().startswith(_SCRUBBED_ENV_PREFIXES)}
     env["PYTHONIOENCODING"] = "utf-8"
     env["PIP_NO_INPUT"] = "1"
+    env["PIP_CONFIG_FILE"] = os.devnull
     return env

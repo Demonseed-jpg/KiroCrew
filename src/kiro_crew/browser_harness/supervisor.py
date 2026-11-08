@@ -920,8 +920,9 @@ class HarnessSupervisor:
         env = await asyncio.to_thread(self._daemon_env, relay_url)
         # ``-I`` as for the worker: isolated mode keeps the working directory and
         # ``PYTHONPATH`` off ``sys.path``, so ``-m browser_harness.daemon`` resolves to
-        # the hash-pinned package in the venv and never to a ``browser_harness/``
-        # directory in whatever project the gateway was started from.
+        # the venv's pinned package (or the runtime copy its ``.pth`` links) and never
+        # to a ``browser_harness/`` directory in whatever project the gateway was
+        # started from.
         proc = await self._spawn(
             [str(python), "-I", "-m", "browser_harness.daemon"], env=env, pipes=False
         )
