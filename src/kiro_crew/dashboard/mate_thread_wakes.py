@@ -18,8 +18,10 @@ envelope ``[Worker report]``).
   wakes nobody.
 
 The same flush delivers a moved crewmate's one upgrade notice first
-(:mod:`kiro_crew.mate_upgrade_notice`). Per-gateway state lives on the dashboard
-state object, never in module globals.
+(:mod:`kiro_crew.mate_upgrade_notice`), then the refs installed apps sent while the
+thread was busy (:func:`app_wakes`, written by :mod:`kiro_crew.dashboard.app_bot_wake`)
+as one turn with crew-log actor ``app``, then the reports. Per-gateway state lives on
+the dashboard state object, never in module globals.
 """
 
 from __future__ import annotations
@@ -268,6 +270,15 @@ def _tasks(state: Any) -> dict[str, asyncio.Task[Any]]:
     return tasks
 
 
+def app_wakes(state: Any) -> dict[str, dict[str, list[str]]]:
+    """App wakes waiting on each thread: thread key -> app name -> refs, in arrival order."""
+    wakes = getattr(state, "_mate_app_wakes", None)
+    if not isinstance(wakes, dict):
+        wakes = {}
+        state._mate_app_wakes = wakes
+    return wakes
+
+
 def _notices(state: Any) -> set[str]:
     """Threads whose claimed upgrade notice is still to be delivered."""
     notices = getattr(state, "_mate_notices", None)
@@ -355,7 +366,8 @@ async def _flush(state: Any, key: str) -> None:
     while True:
         slot = state.get_slot(key)
         reports = _pending(state).get(key)
-        owed = key in _notices(state) or key in _kept_notices(state)
+        apps = app_wakes(state).get(key)
+        owed = key in _notices(state) or key in _kept_notices(state) or bool(apps)
         if not (reports or owed) or slot is None or not is_crewmate_thread(slot):
             # Nothing to say, or the thread is gone: what is pending stays, and
             # the thread's next turn end schedules this again.
@@ -378,6 +390,13 @@ async def _flush(state: Any, key: str) -> None:
         if _idle(slot) and key in _kept_notices(state):
             dispatch_hidden_turn(state, slot, _kept_notices(state).pop(key), human_seen=False)
             logger.info("kept notice started on %s", key)
+            continue
+        if _idle(slot) and apps:
+            from kiro_crew.dashboard.app_bot_wake import wake_prompt
+
+            app_wakes(state).pop(key, None)
+            dispatch_hidden_turn(state, slot, wake_prompt(apps), human_seen=False, actor="app")
+            logger.info("app wake started on %s (%s)", key, ", ".join(sorted(apps)))
             continue
         # The Dashboard line reads the page store: off the loop, before the idle check.
         slug = (members_mod.slug_from_dm_slot_key(key) or "") if reports else ""
@@ -546,6 +565,7 @@ def note_turn_end(
         elif is_crewmate_thread(slot):
             if (
                 _pending(state).get(slot.key)
+                or app_wakes(state).get(slot.key)
                 or slot.key in _notices(state)
                 or slot.key in _kept_notices(state)
             ):

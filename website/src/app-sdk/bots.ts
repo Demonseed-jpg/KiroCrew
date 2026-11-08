@@ -85,28 +85,35 @@ export const botWakePath = (id: string) => `${BOTS_PATH}/${encodeURIComponent(id
 
 function useBotRead<T>(path: string | null): BotQuery<T> {
   const { api } = useCtx()
-  const [data, setData] = useState<T | undefined>(undefined)
-  const [error, setError] = useState<Error | undefined>(undefined)
+  // Each result is kept with the path it was read from, so a hook whose path
+  // changed never hands out the previous path's data or error.
+  const [result, setResult] = useState<{ path: string | null; data?: T; error?: Error }>({ path: null })
+  const data = result.path === path ? result.data : undefined
+  const error = result.path === path ? result.error : undefined
   const [loading, setLoading] = useState(path !== null)
   const [generation, setGeneration] = useState(0)
   const reload = useCallback(() => setGeneration(g => g + 1), [])
   const latest = useRef(0)
 
   useEffect(() => {
-    if (path === null) return
+    if (path === null) {
+      // No read to make: drop any spinner an aborted read left behind.
+      latest.current++
+      setLoading(false)
+      return
+    }
     const run = ++latest.current
     const controller = new AbortController()
     setLoading(true)
     api.get<T>(path, { signal: controller.signal }).then(
       body => {
         if (run !== latest.current) return
-        setData(body)
-        setError(undefined)
+        setResult({ path, data: body })
         setLoading(false)
       },
       (err: unknown) => {
         if (run !== latest.current || controller.signal.aborted) return
-        setError(err instanceof Error ? err : new Error(String(err)))
+        setResult({ path, error: err instanceof Error ? err : new Error(String(err)) })
         setLoading(false)
       },
     )

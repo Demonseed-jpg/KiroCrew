@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
-from kiro_crew.apps.manager_records import hold_app_record_lock, holds_app_record_locks
+from kiro_crew.apps.manager import hold_app_record_lock, holds_app_record_locks
 from kiro_crew.apps.manifest_sections import BOT_GRANT_FAMILY, BOT_SCOPE_NAMES
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 BOT_SCOPE_READ = "read"
 #: Sends a ticked Bot the fixed wake line.
 BOT_SCOPE_WAKE = "wake"
-BOT_SCOPES = BOT_SCOPE_NAMES
 
 
 def app_bot_scopes(app_name: str) -> frozenset[str]:
@@ -61,7 +60,7 @@ def app_bot_scopes(app_name: str) -> frozenset[str]:
     except Exception:
         logger.warning("bot scopes of %r unreadable; granting none", app_name, exc_info=True)
         return frozenset()
-    return frozenset(s for s in granted if s in BOT_SCOPES)
+    return frozenset(s for s in granted if s in BOT_SCOPE_NAMES)
 
 
 def app_granted_bots(app_name: str) -> tuple[str, ...]:
@@ -69,7 +68,7 @@ def app_granted_bots(app_name: str) -> tuple[str, ...]:
     if not app_name:
         return ()
     try:
-        from kiro_crew.apps.manager_records import _read_installed
+        from kiro_crew.apps.manager import _read_installed
 
         meta = _read_installed(app_name)
     except Exception:
@@ -88,7 +87,7 @@ def set_app_granted_bots(app_name: str, slugs: Iterable[str]) -> list[str] | Non
     """
     from dataclasses import replace
 
-    from kiro_crew.apps.manager_records import _read_bot_grants, _read_installed, _write_installed
+    from kiro_crew.apps.manager import _read_bot_grants, _read_installed, _write_installed
 
     hold_app_record_lock(app_name)
     meta = _read_installed(app_name)
@@ -101,7 +100,6 @@ def set_app_granted_bots(app_name: str, slugs: Iterable[str]) -> list[str] | Non
 
 __all__ = [
     "BOT_GRANT_FAMILY",
-    "BOT_SCOPES",
     "BOT_SCOPE_READ",
     "BOT_SCOPE_WAKE",
     "app_bot_scopes",

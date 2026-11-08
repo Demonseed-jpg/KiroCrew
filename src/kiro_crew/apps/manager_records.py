@@ -147,20 +147,25 @@ def _read_schema_version(data: dict[str, Any]) -> int:
         return 1
 
 
-#: A member slug, as ``members_parts.member_space`` validates it.
-_BOT_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?\Z")
-#: Most Bots one app's ticked list may name.
+#: Most Bots one app's ticked list may name. A proposal, to be confirmed.
 MAX_BOT_GRANTS = 200
 
 
 def _read_bot_grants(value: Any) -> list[str]:
-    """``botGrants`` as stored: valid slugs, each once, capped. Anything else is none."""
+    """``botGrants`` as stored: valid member slugs, each once, capped. Anything else is none."""
+    # Deferred: the member-space module is not needed to load an app record.
+    from kiro_crew.members import MemberSlugError, validate_slug
+
     if not isinstance(value, list):
         return []
     out: list[str] = []
     for entry in value:
-        if isinstance(entry, str) and _BOT_SLUG_RE.match(entry) and entry not in out:
-            out.append(entry)
+        try:
+            slug = validate_slug(entry)
+        except MemberSlugError:
+            continue
+        if slug not in out:
+            out.append(slug)
     return out[:MAX_BOT_GRANTS]
 
 

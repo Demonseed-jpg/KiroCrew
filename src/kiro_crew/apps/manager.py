@@ -145,7 +145,6 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
     )
     from kiro_crew.apps.manager_records import (  # noqa: F401
         _ALWAYS_STORED_FAMILIES,
-        _BOT_SLUG_RE,
         _GRANT_AND_SCOPE_WIDENING,
         _GRANT_WIDENING,
         _SCOPE_WIDENING,
@@ -269,6 +268,7 @@ if TYPE_CHECKING:  # names it serves from outside the family, from their homes
     from dataclasses import (  # noqa: F401
         asdict,
         dataclass,
+        field,
         replace,
     )
     from pathlib import (  # noqa: F401

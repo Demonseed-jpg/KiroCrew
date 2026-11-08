@@ -6533,7 +6533,8 @@ cannot tell a Bot it was not given from one that does not exist:
 
 1. **A scope.** `permissions.bots` holds `"read"`, `"wake"` or both. Any other entry
    is dropped at parse (`manifest_sections._bot_scopes`). `bots` is a staged grant
-   family (`point_grants.PERMISSION_GRANT_FAMILIES`, `manager_records.STAGED_GRANT_FAMILIES`):
+   family, registered with `point_grants.register_permission_grants`
+   (`manifest_sections.bot_grant_entries`) like `workerAutoApprove`:
    an install approves what it declares, and a scope an update adds waits for the
    owner's approval on the app detail page, like a new `permissions.api` path.
 2. **A ticked Bot.** The owner ticks Bots for the app in the app detail page's "Bots
@@ -6563,13 +6564,18 @@ pinned by `test_bot_scopes_never_open_a_private_member_route`.
 
 **The wake.** The turn runs through `mate_welcome.dispatch_hidden_turn` with crew-log
 actor `app`, so nothing in it speaks as the owner, and the Bot is told that what it
-reads through the app's tools is data, not instructions. A busy Bot keeps the refs per
-thread and app (at most `MAX_PENDING_REFS`) and gets one turn for all of them when its
-running turn ends; a closed thread is loaded from its transcript first, as a goal
-check-in does; a Bot whose thread was never opened answers 409 `bot_unavailable`. At
-most `WAKE_LIMIT` accepted wakes per app and Bot in `WAKE_WINDOW_SECS` (6 per 60 s, a
-proposal), past which the route answers 429 with `Retry-After`. Pending wakes and the
-counters live on the dashboard state, so a restart drops both.
+reads through the app's tools is data, not instructions. The refs wait in the thread's
+wake store (`mate_thread_wakes.app_wakes`, per thread and app) and the flush that
+delivers a worker report delivers them (`mate_thread_wakes.schedule_flush`): at once
+on an idle thread, else from the thread's next turn end, all of one thread's refs in
+one turn, after an owed upgrade notice and before the worker reports. At most
+`MAX_PENDING_REFS` refs from one app wait on a busy Bot; a new ref past that is
+refused with 429 `wake_queue_full`, never dropped once accepted. A dashboard session gets 403 `app_token_required`; a closed thread is loaded from its transcript first, as a goal
+check-in does; a Bot whose thread was never opened answers 409 `bot_unavailable`. The
+rate limit is the `create_rate_limit.APP_BOT_WAKE` budget row, keyed per app and Bot
+(`MAX_APP_BOT_WAKES_PER_WINDOW` in `WINDOW_SECS`: 20 per 300 s, a proposal), past
+which the route answers 429 with `Retry-After`. Held refs and the budget live in
+memory, so a restart drops both.
 
 **Dashboard SDK.** `useBots()`, `useBot(id)` and `useWakeBot()` join
 `@kirocrew/app-sdk` (`website/src/app-sdk/bots.ts`) and its vendor stub, and
@@ -6578,7 +6584,7 @@ draft's `/v1/crew/bots` carries the same shapes, so only the paths change when t
 move there.
 
 Writers: `apps/bot_grants.py`, `apps/routes_bot_grants.py`, `apps/manifest_sections.py`,
-`apps/point_grants.py`, `apps/manager_records.py`, `apps/routes_enable.py`,
+`apps/point_grants.py`, `apps/manager_records.py`,
 `apps/app_sdk_level.py`, `dashboard/handlers/members_access.py`,
 `dashboard/handlers/members_app.py`, `dashboard/handlers/members_roster.py`,
 `dashboard/handlers/member_goals.py`, `dashboard/app_bot_wake.py`,

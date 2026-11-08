@@ -49,7 +49,7 @@ describe('AppDetailBotGrants', () => {
     expect(screen.getAllByText(/not approved/)).toHaveLength(1)
 
     fireEvent.click(reviewer)
-    fireEvent.click(screen.getByRole('button', { name: 'Save Bot access' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save bot access' }))
     await waitFor(() => expect(api.setAppBotGrants).toHaveBeenCalledWith('notes', ['writer', 'code-reviewer']))
     expect(await screen.findByRole('status')).toHaveTextContent('Saved.')
   })

@@ -321,7 +321,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _prune_stale_app_resources,
         _registration_source,
     )
-    from kiro_crew.apps.manager_records import (  # noqa: F401
+    from kiro_crew.apps.manager import (  # noqa: F401
         MAX_BOT_GRANTS,
     )
     from kiro_crew.apps.point_grants import (  # noqa: F401
@@ -342,6 +342,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _touch_served_blob,
     )
     from kiro_crew.apps.routes_bot_grants import (  # noqa: F401
+        _not_installed,
         _owner_denial,
         _view,
     )

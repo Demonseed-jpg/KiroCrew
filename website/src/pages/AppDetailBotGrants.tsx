@@ -12,7 +12,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { AppBotGrants } from '../api/client/apps'
 import { membersRosterQuery } from '../api/membersQuery'
-import { Btn, Card, CardTitle } from '../components/ui'
+import { Btn, Card, CardTitle, Checkbox } from '../components/ui'
 import ErrorNotice from '../components/ErrorNotice'
 import { i18nT } from '../i18n/t'
 import { compareText } from '../i18n/format'
@@ -97,14 +97,20 @@ export default function AppDetailBotGrants({ appName, declared }: { appName: str
           const id = `bot-grant-${appName}-${bot.slug}`
           return (
             <label key={bot.slug} htmlFor={id} className="flex items-center gap-2 text-[13px] text-text cursor-pointer select-none">
-              <input id={id} type="checkbox" className="rounded" aria-label={bot.display_name || bot.name} checked={current.includes(bot.slug)} onChange={() => toggle(bot.slug)} disabled={!grants.data || saving} />
+              <Checkbox id={id} aria-label={bot.display_name || bot.name} checked={current.includes(bot.slug)} onChange={() => toggle(bot.slug)} disabled={!grants.data || saving} />
               <span className="truncate">{bot.display_name || bot.name}</span>
             </label>
           )
         })}
       </div>
       {(error || grants.error || roster.error) && (
-        <ErrorNotice message={error || String((grants.error ?? roster.error)?.message ?? '')} variant="inline" />
+        ticked === null ? (
+          <ErrorNotice message={error || String((grants.error ?? roster.error)?.message ?? '')} variant="inline" askAgent />
+        ) : (
+          // No hand-off: the unsaved ticks are local state that the hand-off's
+          // navigation to chat would discard.
+          <ErrorNotice message={error || String((grants.error ?? roster.error)?.message ?? '')} variant="inline" />
+        )
       )}
       <div className="mt-3 flex items-center gap-2">
         <Btn onClick={save} disabled={!grants.data || saving || ticked === null}>{i18nT('pages.appDetailPage.bots_save')}</Btn>

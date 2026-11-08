@@ -79,6 +79,29 @@ describe('useBot', () => {
   })
 })
 
+describe('useBot id change', () => {
+  it("never shows the previous Bot's goals under a new id", async () => {
+    setApi({ '/api/members': LIST, '/api/members/code-reviewer/goals': GOALS })
+    const { result, rerender } = renderHook(({ id }) => useBot(id), { initialProps: { id: 'code-reviewer' } })
+    await waitFor(() => expect(result.current.data?.goals).toEqual(GOALS))
+    rerender({ id: 'someone-else' })
+    expect(result.current.data).toBeUndefined()
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data).toBeUndefined()
+    expect(result.current.error).toBeInstanceOf(Error)
+  })
+
+  it('stops loading when the id is cleared mid-read', async () => {
+    const pending = new Promise(() => {})
+    ctx.current = { api: { get: vi.fn(() => pending), post: vi.fn() } }
+    const { result, rerender } = renderHook(({ id }) => useBot(id), { initialProps: { id: 'code-reviewer' } })
+    expect(result.current.loading).toBe(true)
+    rerender({ id: '' })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data).toBeUndefined()
+  })
+})
+
 describe('useWakeBot', () => {
   it('posts only the ref to the wake route', async () => {
     const { post } = setApi({})
