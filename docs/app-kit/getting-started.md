@@ -210,6 +210,7 @@ Available in `@kirocrew/app-sdk`:
 | `useNotify()` | Show toast notifications |
 | `useNavBadge()` | Update sidebar badge count |
 | `useChatLauncher()` | Open a new chat or target `slotKey`; set `autoSend: false` for an unsent draft |
+| `useBots()` / `useBot(id)` / `useWakeBot()` | The Bots the owner gave your app, one Bot's goals, and a fixed-text wake; needs `permissions.bots` ([API reference](api-reference.md#bots-usebots-usebot-usewakebot)) |
 
 `useAppInfo().active` tells your app whether its host surface is the one the user is
 looking at. A routed `ui.pages` page is always the visible surface, so it reads `true`.
