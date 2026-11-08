@@ -2131,7 +2131,15 @@ end the session rather than let it run as a different agent. Guard (A): when
 the response advertises a `modes` list, the requested agent must be in it
 (`AcpRuntime._mode_available`); an absent id is refused naming the spec file
 and `kirocrew setup --agent-only`, never silently left on the host's default
-mode. A published `<agent>--readonly` side spec is the exception: its refusal
+mode. Setup writes only the specs Kiro Crew owns (`OWNED_KIRO_AGENT_FILES`), so
+when the absent id is the configured `agent.default_agent`, is not one of those
+and has no spec file, the refusal names the setting and
+`kirocrew config set agent.default_agent kirocrew` instead, the remedy
+`kirocrew doctor` prints for the same state
+(`side_readonly_spec.missing_default_agent_explanation`, read off the event
+loop). Guard (B) and the KAS route's missing-definition refusal
+(`apps.manager_lookup.missing_agent_reason`, for an agent no app declares) give
+that remedy too. A published `<agent>--readonly` side spec is the exception: its refusal
 explains the derived spec and names the base agent
 (`side_readonly_spec.unavailable_mode_explanation`; see [side.md](side.md)). Guard (C): the shared runtime asks its harness
 `activation_refusal(agent, resp)` (harness-parity H13: a seam, not a backend
@@ -2166,6 +2174,18 @@ the alias is mapped back through the registered batch
 built-in a later engine adds under a new id fails loudly instead of resurrecting
 the silent substitution. (Guard (B) is the spawn-flag check for a markdown-only spec on a
 JSON-only host, `_spawn_agent_not_loaded_reason`.)
+
+On KAS, `session/new` already names that wire id as `_meta.kiro.modeId`
+(`KasHarness.session_request`, read from the batch's first entry, the session's
+own agent ahead of any sub-agent target, so a session on the runtime default
+gets it too). The session then starts in the Bot's agent
+rather than in the engine's `vibe` mode, which would first start every
+`~/.kiro/settings/mcp.json` server, and `set_mode` is still sent. Guards (A) and
+(C) therefore judge a session that may already run the named mode, and a refusal
+ends it through `terminate_session` before any prompt. An id the engine cannot
+resolve falls back to `vibe` with a `_kiro/customAgent/not_found` notification
+(measured on the 0.66.33 bundle), so (A) still refuses a dropped entry.
+`session/load` names no mode: a resumed session already has one.
 
 Step 4 (`set_model`) is **conditional**: only sent when `model` is explicitly
 set (i.e., for the default kirocrew agent).  Custom agents skip this so
@@ -2500,6 +2520,37 @@ spec the same way kiro-cli v2 does where the wire allows it:
   kiro-cli 2.35.1: the deny with the target excluded left the call to its
   permission request, with another name excluded it was refused by the rule, and
   the allow ran it with no request.
+- The agent's `availableAgents` names are registered in the same batch
+  (`acp/kas_subagent_targets.py`, appended by `KasHarness.session_extras`, so
+  `session/load` re-sends them too). KAS's `invoke_sub_agent` looks a name up only
+  in the session's registry, the batch plus the on-disk profiles it keeps, and it
+  keeps no profile written for kiro-cli (`allowedTools` or `toolsSettings` and no
+  `permissions`), so a name the batch lacks is answered `Agent '<name>' not found
+  in registry`. Only when the agent's projected entry mounts `invoke_sub_agent`,
+  read as the engine's tool filter reads it: `tools` is `"*"` or holds an entry
+  equal to the tool's id or one of its tags (`@builtin`, `@subagent`), or a `*` or
+  `?` pattern matching one, and no `excludedTools` entry does the same. An
+  omitted list leaves the engine's own roster. A literal name is resolved like the
+  session's agent (fork governance, a derived spec's freshness, nearest-first with
+  a checkout's spec trusted for nothing) and projected by the same
+  `build_kas_custom_agents`, with its own switched-off tools and no member grants.
+  A `*` pattern is matched against the agents the spawn gate offers, and at most
+  `MAX_SUBAGENT_TARGETS` (8) are registered. Not registered, and named in the
+  session-start notice with the reason: a name no spec declares, a pattern that
+  matches nothing, an agent whose spec cannot be used, a reserved id
+  (`KAS_RESERVED_AGENT_IDS`, sent under another id the rule denies), a mate
+  service agent, the overflow past the cap, and an agent whose limits Crew applies
+  only at its own gate (`denyByDefault`, `fallbackAction: "deny"`, its own
+  `preToolUse` hooks), because the gate reads those of the agent the session runs
+  and a sub-agent's calls reach it under that agent. Everything that reads the
+  batch for the session's own agent matches it by id. For the same reason the
+  grants Crew answers at its gate (`allowedTools` built-ins, `allowedCommands`,
+  write `allowedPaths`) are the session agent's when a registered sub-agent's
+  built-in call reaches it, and they can be wider than the sub-agent's own spec;
+  the session gains nothing its own agent could not already do unprompted. On a
+  remote workspace `_remote_workspace_agents` refuses the session only for its
+  own entry's shell or file rules; a sub-agent with such rules is left out of the
+  batch and named in the session-start notice (`REMOTE_SUBAGENTS_RESTRICTED`).
 - `toolsSettings.shell.allowedCommands` travels as no rule: a shell allow would
   skip the permission request Crew's deny floor runs on. Crew answers a matching
   command at that request itself, through the gate's `spec-builtin-grant` row
