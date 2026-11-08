@@ -46,6 +46,7 @@ __all__ = [
     "is_slack_slot",
     "is_slack_text_row",
     "slack_title_text",
+    "stored_title_is_mrkdwn",
 ]
 
 #: Transcript row meta: this user row's text is Slack mrkdwn, copied from a Slack
@@ -147,6 +148,21 @@ def is_slack_session_key(key: str) -> bool:
 def is_slack_slot(slot: object) -> bool:
     """Whether *slot* is a Slack conversation's tab, so its user text is Slack mrkdwn."""
     return is_slack_session_key(getattr(slot, "key", ""))
+
+
+#: Stored ``title_origin`` values that mean a person typed the title (a rename),
+#: so it is their own words, not Slack mrkdwn.
+_TYPED_TITLE_ORIGINS = frozenset({"user", "member"})
+
+
+def stored_title_is_mrkdwn(title: object, origin: object) -> bool:
+    """Whether a Slack session's persisted *title* is read as mrkdwn.
+
+    Only a string, and only when its stored ``title_origin`` is not a person's
+    rename: a dashboard rename to ``Debug &amp; decoding`` is kept as typed, and a
+    malformed non-string title is left for the caller's own fallback.
+    """
+    return isinstance(title, str) and origin not in _TYPED_TITLE_ORIGINS
 
 
 def is_slack_text_row(row: object) -> bool:
