@@ -586,6 +586,13 @@ its own once the cache refreshes with a list that carries it.
   pick (or waits for an effort write already on the wire) and sends the model
   after it; if the effort write is refused, the model pick aborts rather than
   resetting the owner's previous selection.
+- The model chip draws the session's harness mark (`HarnessLogo`) before the
+  model only when the capability read's `backend` is not the install's own
+  harness (`offDefaultHarness` in `website/src/api/acpBackend.ts`, against
+  `configuredAcpBackend`; Kiro CLI and KAS count as one). The mark's tooltip and
+  the chip's accessible name say `Runs on <harness>` with the `acpBackendName`
+  label. A session on the install's harness, or one whose read or config has not
+  loaded, shows no mark.
 - The composer chip's marker (`modelChipMarker` in `website/src/lib/model.ts`)
   reads `default` only when the model shown is the Settings default and the slot
   takes it from there, and `auto` when the session was served a different model

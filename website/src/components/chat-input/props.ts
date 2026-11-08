@@ -237,6 +237,14 @@ export interface ChatInputProps {
    * one that costs money. */
   modelIsJevRouted?: boolean
   /**
+   * The harness this session runs on, as selection-capabilities' `backend`
+   * reports it (the runtime id: `''` is Kiro CLI, `'claude'` Claude Code). When
+   * it is not this install's own harness, the model chip draws that harness's
+   * mark before the model, named in its tooltip (`Runs on Claude Code`); on the
+   * install's own harness the chip is unchanged. Unset (not read yet, or the
+   * read failed): no mark rather than a guessed one. */
+  harnessBackend?: string
+  /**
    * Picker openers (agent, model, project, and `onSessionControlClick` below).
    * Each hands the host the chip's click-time rect AND the chip element itself:
    * the host owns the picker's portal and must keep it glued to the chip while

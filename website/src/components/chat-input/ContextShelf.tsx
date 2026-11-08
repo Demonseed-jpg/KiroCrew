@@ -10,6 +10,8 @@ import ContextBar, { contextTip, contextColor, composeContextReadout, contextPct
 import ErrorNotice from '../ErrorNotice'
 import { Btn, Slider } from '../ui'
 import { effortLabel } from '../../lib/effort'
+import { acpBackendName, offDefaultHarness, type AcpBackendConfig } from '../../api/acpBackend'
+import { HarnessLogo } from '../HarnessLogo'
 import { fmtPercent } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
 import type { ComposerControl } from '../composerControl'
@@ -431,8 +433,9 @@ export function ContextUsageControl({ contextPct, contextUnknown = false, contex
 /** The model chip. It names the level in force beside the model; the level is
  *  CHANGED inside the model picker the chip opens (model and effort are one
  *  control, docs/decisions/2026-06-14-chat-composer-model-and-effort-are-one-control.md). */
-export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault, modelIsAutoChosen, reasoningEffort, effortIsDefault, hasEffort, isRunning, shelfTiny, composerControl, modelChipPressedFromComposerRef, onModelClick }: {
+export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault, modelIsAutoChosen, reasoningEffort, effortIsDefault, hasEffort, harnessBackend, isRunning, shelfTiny, composerControl, modelChipPressedFromComposerRef, onModelClick }: {
   modelName: string
+  harnessBackend?: string
   modelIsJevRouted?: boolean
   modelIsInheritedDefault?: boolean
   modelIsAutoChosen?: boolean
@@ -472,7 +475,18 @@ export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault
         : i18nT('components.chatInput.model_2', { name: modelName })
   // While a response runs the name is followed by the one line that matters
   // then: a pick applies from the next message, as the project chip says.
-  const modelChipLabel = `${modelChipName}${effortSuffix}${isRunning
+  // A session on another harness than this install's carries that harness's
+  // mark before the model; a session on the install's own harness looks as it
+  // always did. Same shared config read as the rest of the app.
+  const cfgQ = useQuery<AcpBackendConfig>({
+    queryKey: ['kirocrewConfig'],
+    queryFn: () => api.kirocrewConfig(),
+    staleTime: 30_000,
+    enabled: harnessBackend !== undefined,
+  })
+  const markHarness = offDefaultHarness(harnessBackend, cfgQ.data)
+  const harnessLabel = markHarness === undefined ? '' : i18nT('components.chatInput.harness_mark', { harness: acpBackendName({ id: markHarness }) })
+  const modelChipLabel = `${harnessLabel ? `${harnessLabel} · ` : ''}${modelChipName}${effortSuffix}${isRunning
     ? `\n${i18nT('components.chatInput.model_switch_applies_next_turn')}`
     : ''}`
   // Opens on the mouse press (usePressActivation); keyboard and touch on click.
@@ -506,6 +520,13 @@ export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault
     title={modelChipLabel}
     aria-label={modelChipLabel}
   >
+    {/* The chip's own title / aria-label above carry the harness name; the
+        span's title lets a hover on the mark alone say it too. */}
+    {markHarness !== undefined && (
+      <span className="inline-flex shrink-0" title={harnessLabel} data-testid="composer-model-chip-harness">
+        <HarnessLogo id={markHarness} size={13} />
+      </span>
+    )}
     <span className="truncate max-w-[180px]">
       {modelIsJevRouted ? i18nT('components.modelDropdownList.auto_jev') : modelName}
     </span>

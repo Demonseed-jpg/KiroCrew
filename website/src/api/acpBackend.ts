@@ -90,6 +90,22 @@ export function isKiroHarness(cfg: AcpBackendConfig | undefined): boolean {
   return KIRO_HARNESS_BACKENDS.includes(configuredAcpBackend(cfg))
 }
 
+/**
+ * The harness a session runs on, in config spelling, when it is NOT the
+ * install's own (`configuredAcpBackend`); `undefined` when it is, or when either
+ * side has not loaded. *backend* is selection-capabilities' runtime id, where
+ * Kiro CLI is `''`. Kiro CLI and KAS count as one harness here: a stored `kiro`
+ * choice runs on KAS once kiro-cli offers it, and both draw the same mark.
+ */
+export function offDefaultHarness(backend: string | undefined, cfg: AcpBackendConfig | undefined): string | undefined {
+  if (backend === undefined || cfg === undefined) return undefined
+  const id = backend || ACP_BACKEND_KIRO
+  const configured = configuredAcpBackend(cfg)
+  if (id === configured) return undefined
+  if (KIRO_HARNESS_BACKENDS.includes(id) && KIRO_HARNESS_BACKENDS.includes(configured)) return undefined
+  return id
+}
+
 /** Shared translated harness labels, one per harness the gateway knows
  *  (`ACP_BACKENDS_KNOWN`; `test_harness_names_cover_every_known_backend` holds
  *  the list). A harness an edition registers later keeps the server's policy name. */
