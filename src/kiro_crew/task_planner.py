@@ -24,6 +24,7 @@ from kiro_crew.task_models import (
     Task,
     TaskStatus,
 )
+from kiro_crew.task_status_file import validate_status_file
 from kiro_crew.tool_gate_busy import hook_gate_busy
 
 if TYPE_CHECKING:
@@ -522,6 +523,9 @@ def update_plan_tasks(run: Project, tasks: list[dict]) -> Project:
                 description=item.get("description", item["title"]),
                 requires_approval=bool(item.get("requires_approval")),
                 force_approval=new_fa,
+                # Kept like force_approval: no edit surface sends it, and dropping
+                # it would silently remove the step's own failure check.
+                status_file=existing_map[i].status_file if i in existing_map else "",
                 depends_on=valid_deps,
             )
         )
@@ -546,6 +550,7 @@ _YAML_ALLOWED_AGENT_KEYS = frozenset(
         "shell",
         "requires_approval",
         "force_approval",
+        "status_file",
     }
 )
 _YAML_APPROVAL_KEYS = ("requires_approval", "force_approval")
@@ -636,6 +641,9 @@ def decompose_yaml(yaml_content: str) -> list[Task]:
         for approval_key in _YAML_APPROVAL_KEYS:
             if approval_key in spec and not isinstance(spec[approval_key], bool):
                 raise ValueError(f"Agent '{name}' {approval_key} must be a boolean")
+        status_file = (
+            validate_status_file(name, spec["status_file"]) if "status_file" in spec else ""
+        )
 
         deps = spec.get("depends_on", [])
         if deps is None:
@@ -666,6 +674,7 @@ def decompose_yaml(yaml_content: str) -> list[Task]:
                 depends_on=dep_indices,
                 requires_approval=spec.get("requires_approval", False),
                 force_approval=spec.get("force_approval", False),
+                status_file=status_file,
             )
         )
 
@@ -702,8 +711,8 @@ def plan_to_yaml(tasks: list[Task]) -> str:
     Inverse of :func:`decompose_yaml` — the emitted YAML re-imports through
     ``decompose_yaml`` to the same task graph (titles + dependency structure).
     ``depends_on`` is emitted as agent-name references (not indices) so the DAG
-    survives re-import's renumbering. Approval gates round-trip so saving a
-    reusable plan never weakens it.
+    survives re-import's renumbering. Approval gates and a step's declared
+    ``status_file`` round-trip so saving a reusable plan never weakens it.
     """
     if not tasks:
         raise ValueError("no tasks to export")
@@ -742,6 +751,8 @@ def plan_to_yaml(tasks: list[Task]) -> str:
             spec["requires_approval"] = True
         if t.force_approval:
             spec["force_approval"] = True
+        if t.status_file:
+            spec["status_file"] = t.status_file
         agents[idx_to_name[t.index]] = spec
 
     return _yaml.safe_dump(
